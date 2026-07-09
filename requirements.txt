@@ -1,0 +1,6 @@
+fastapi>=0.115
+uvicorn>=0.30
+pywebview>=5.0
+PyMuPDF>=1.24
+pyinstaller>=6.0 ; python_version >= "3.10"
+Pillow>=10.0

@@ -1,0 +1,540 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PDF Editor Pro</title>
+<link rel="icon" type="image/png" href="icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div id="app">
+
+  <!-- ===== TITLEBAR ===== -->
+  <header class="titlebar">
+    <img class="titlebar-logo" src="icon.png" alt="PDF Editor Pro">
+    <span class="titlebar-app">PDF Editor Pro</span>
+    <span class="titlebar-sep">—</span>
+    <span class="titlebar-file" id="file-name">Factura_F-2026-0847.pdf</span>
+    <span class="titlebar-drag pywebview-drag-region"></span>
+    <div class="titlebar-controls">
+      <div class="win-btn" id="win-minimize" title="Minimizar"><span class="win-min-icon"></span></div>
+      <div class="win-btn" id="win-maximize" title="Maximizar"><span class="win-max-icon"></span></div>
+      <div class="win-btn win-close" id="win-close" title="Cerrar">✕</div>
+    </div>
+  </header>
+
+  <!-- ===== TOOLBAR ===== -->
+  <div class="toolbar">
+    <button id="btn-open" class="btn-primary" title="Abrir un documento PDF">
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v1"/><path d="M3 9h16.6l-1.9 8a2 2 0 0 1-2 1.6H4.9a2 2 0 0 1-2-1.6L3 9Z"/></svg>Abrir PDF
+    </button>
+    <input type="file" id="file-input" accept=".pdf,application/pdf" hidden>
+
+    <span class="tb-sep"></span>
+
+    <button id="btn-split" class="btn-toolbar" title="Separar la página actual en un nuevo PDF">
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.4"/><circle cx="6" cy="18" r="2.4"/><path d="M7.9 7.5 20 18M7.9 16.5 20 6"/></svg>Separar
+    </button>
+    <button id="btn-merge" class="btn-toolbar" title="Fusionar otro PDF al final del documento">
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="9" height="13" rx="1.6"/><rect x="12" y="7" width="9" height="13" rx="1.6"/></svg>Fusionar
+    </button>
+
+    <span class="tb-sep"></span>
+
+    <button id="btn-ocr-modal" class="btn-toolbar" title="Aplicar reconocimiento óptico (OCR)">
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8V5.6A1.6 1.6 0 0 1 5.6 4H8M16 4h2.4A1.6 1.6 0 0 1 20 5.6V8M20 16v2.4a1.6 1.6 0 0 1-1.6 1.6H16M8 20H5.6A1.6 1.6 0 0 1 4 18.4V16"/><path d="M7 12h10"/></svg>OCR
+    </button>
+    <button id="btn-export-modal" class="btn-toolbar" title="Exportar a Word, Excel o HTML">
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M8 11l4 4 4-4"/><path d="M5 19h14"/></svg>Exportar
+    </button>
+
+    <span class="tb-sep"></span>
+
+    <button id="btn-undo" class="btn-icon36 is-disabled" title="Deshacer (Ctrl+Z)">
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 7 4 12l5 5"/><path d="M4 12h11a5 5 0 0 1 0 10h-1.5"/></svg>
+    </button>
+    <button id="btn-redo" class="btn-icon36 is-disabled" title="Rehacer (Ctrl+Y)">
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M15 7l5 5-5 5"/><path d="M20 12H9a5 5 0 0 0 0 10h1.5"/></svg>
+    </button>
+    <button id="btn-save" class="btn-icon36" title="Guardar (Ctrl+S)">
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z"/><path d="M17 21v-8H7v8M7 3v5h8"/></svg>
+    </button>
+
+    <div class="toolbar-right">
+      <div class="search-box">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#8a919c" stroke-width="1.8" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.6-3.6"/></svg>
+        <input placeholder="Buscar texto en el documento…">
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== MIDDLE ===== -->
+  <div class="middle">
+
+    <!-- LEFT PANEL -->
+    <aside class="panel-left">
+      <div class="panel-left-head">
+        <span class="panel-title">Páginas</span>
+        <span class="panel-sub" id="page-count">8 páginas</span>
+      </div>
+      <div class="page-list" id="page-list"></div>
+      <div class="panel-left-foot">
+        <button id="btn-add-page" class="btn-page-add" title="Agregar página">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>Agregar
+        </button>
+        <button id="btn-dup-page" class="btn-page-icon" title="Duplicar página">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>
+        </button>
+        <button id="btn-del-page" class="btn-page-icon btn-page-del" title="Eliminar página">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12"/></svg>
+        </button>
+      </div>
+    </aside>
+
+    <!-- CANVAS -->
+    <main class="canvas-wrap">
+      <div class="canvas-scroll" id="canvas-scroll">
+        <div class="page-margin" id="page-margin">
+          <div class="page-scale" id="page-scale">
+
+            <!-- Documento real (PDF abierto) -->
+            <div class="doc-page real-page" id="real-doc" hidden>
+              <img id="page-image" alt="Página del documento" draggable="false">
+              <div id="annot-overlay">
+                <div id="draw-ghost-rect" hidden></div>
+                <svg id="draw-ghost-line" hidden><line x1="0" y1="0" x2="0" y2="0"/></svg>
+                <input id="annot-text-input" placeholder="Escribe y pulsa Enter…" hidden>
+              </div>
+            </div>
+
+            <!-- Documento de demostración -->
+            <div class="doc-page" id="demo-doc">
+
+              <!-- header -->
+              <div class="doc-header">
+                <div class="doc-logo-wrap" id="el-logo">
+                  <div class="doc-logo">LOGO EMPRESA</div>
+                  <span class="sel-ring sel-ring-handles"><span></span><span></span><span></span><span></span></span>
+                  <div class="ctx-menu ctx-below" id="ctx-logo">
+                    <div class="ctx-item" data-ctx-action="move-logo"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#5a616b" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18M3 12h18M12 3l-3 3M12 3l3 3M12 21l-3-3M12 21l3-3M3 12l3-3M3 12l3 3M21 12l-3-3M21 12l-3 3"/></svg>Mover imagen</div>
+                    <div class="ctx-item" data-ctx-action="close"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#5a616b" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 15V5a1 1 0 0 1 1-1h14a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H9l-5-5Z"/><path d="M8 10l3 3 5-5"/></svg>Reemplazar imagen…</div>
+                    <div class="ctx-item" data-ctx-action="close"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#5a616b" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>Duplicar</div>
+                    <div class="ctx-divider"></div>
+                    <div class="ctx-item ctx-danger" data-ctx-action="close"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12"/></svg>Eliminar</div>
+                  </div>
+                </div>
+                <div class="doc-header-right">
+                  <div class="doc-title">FACTURA</div>
+                  <div class="doc-meta">
+                    <div>N.º&nbsp;<span class="editable" id="el-invnum"><span class="editable-text" id="v-invnum">F-2026-0847</span></span></div>
+                    <div>Fecha&nbsp;<span class="editable" id="el-invdate"><span class="editable-text" id="v-invdate">09/07/2026</span></span></div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- de / facturar a -->
+              <div class="doc-parties">
+                <div class="doc-party">
+                  <div class="doc-label">De</div>
+                  <div class="doc-party-name">Contadores Asociados S.A. de C.V.</div>
+                  <div class="doc-party-info">RFC: CAS-980312-XI1<br>Av. Reforma 1250, Piso 8<br>Ciudad de México, CDMX 06600</div>
+                </div>
+                <div class="doc-party">
+                  <div class="doc-label">Facturar a</div>
+                  <div class="editable editable-block" id="el-client"><span class="editable-text" id="v-client">Distribuidora Andina S.A.</span>
+                    <div class="ctx-menu ctx-below" id="ctx-client">
+                      <div class="ctx-item" data-ctx-action="close"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#5a616b" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5Z"/></svg>Editar texto</div>
+                      <div class="ctx-item" data-ctx-action="close"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#5a616b" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>Duplicar</div>
+                      <div class="ctx-item" data-ctx-action="close"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#5a616b" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8V5.6A1.6 1.6 0 0 1 5.6 4H8M16 4h2.4A1.6 1.6 0 0 1 20 5.6V8M20 16v2.4a1.6 1.6 0 0 1-1.6 1.6H16M8 20H5.6A1.6 1.6 0 0 1 4 18.4V16M7 12h10"/></svg>Aplicar OCR aquí</div>
+                      <div class="ctx-divider"></div>
+                      <div class="ctx-item ctx-danger" data-ctx-action="close"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12"/></svg>Eliminar</div>
+                    </div>
+                  </div>
+                  <div class="doc-party-info">RFC: DAN-050916-Q2A<br>Calle Larco 345, Miraflores<br>Lima, Perú 15074</div>
+                </div>
+              </div>
+
+              <!-- table -->
+              <div class="doc-table-zone" id="el-table">
+                <table class="doc-table">
+                  <thead><tr>
+                    <th class="th-left">Descripción</th>
+                    <th class="th-center th-cant">Cant.</th>
+                    <th class="th-right th-num">Precio unit.</th>
+                    <th class="th-right th-num">Importe</th>
+                  </tr></thead>
+                  <tbody>
+                    <tr><td>Consultoría contable mensual</td><td class="td-center">1</td><td class="td-right">12,500.00</td><td class="td-right">12,500.00</td></tr>
+                    <tr><td><span class="hl">Auditoría de estados financieros</span></td><td class="td-center">1</td><td class="td-right">24,000.00</td><td class="td-right">24,000.00</td></tr>
+                    <tr><td>Declaración anual de ISR</td><td class="td-center">1</td><td class="td-right">6,000.00</td><td class="td-right">6,000.00</td></tr>
+                    <tr><td>Conciliación bancaria (12 meses)</td><td class="td-center">12</td><td class="td-right">533.33</td><td class="td-right">6,400.00</td></tr>
+                  </tbody>
+                </table>
+                <span class="sel-ring sel-ring-handles sel-ring-table"><span></span><span></span><span></span><span></span><span class="sel-ring-label">Tabla · 4 × 4</span></span>
+                <div class="ctx-menu ctx-table-pos" id="ctx-table">
+                  <div class="ctx-item" data-ctx-action="detect"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#5a616b" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M9 4v16M15 4v16"/></svg>Extraer tabla</div>
+                  <div class="ctx-item" data-ctx-action="close"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#5a616b" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5Z"/></svg>Editar celdas</div>
+                  <div class="ctx-item" data-ctx-action="close"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#5a616b" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8V5.6A1.6 1.6 0 0 1 5.6 4H8M16 4h2.4A1.6 1.6 0 0 1 20 5.6V8M20 16v2.4a1.6 1.6 0 0 1-1.6 1.6H16M8 20H5.6A1.6 1.6 0 0 1 4 18.4V16M7 12h10"/></svg>Aplicar OCR aquí</div>
+                </div>
+              </div>
+
+              <!-- totals -->
+              <div class="doc-totals">
+                <div class="doc-totals-box">
+                  <div class="doc-totals-row"><span>Subtotal</span><span class="num">$48,900.00</span></div>
+                  <div class="doc-totals-row doc-totals-row-line"><span>IVA (16%)</span><span class="num">$7,824.00</span></div>
+                  <div class="doc-totals-final">
+                    <span class="doc-totals-final-label">Total</span>
+                    <span class="editable editable-total" id="el-total"><span class="editable-text" id="v-total">$56,724.00</span></span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="doc-footer">
+                <strong>Condiciones de pago:</strong> Transferencia bancaria a 15 días. CLABE 012 180 00123456789 0 · BBVA.<br>Documento generado electrónicamente. Este comprobante es válido sin firma autógrafa.
+              </div>
+
+              <!-- annotation note -->
+              <div class="doc-note" id="doc-note">Verificar cálculo de IVA con el cliente.<div class="doc-note-by">— J. Morales · 14:32</div></div>
+
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- floating tool strip -->
+      <div class="tool-strip">
+        <button class="tool-btn" data-tool="select" title="Seleccionar y mover"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3l6.5 16 2.3-6.2L20 10.5 5 3Z"/></svg></button>
+        <button class="tool-btn" data-tool="highlight" title="Resaltar"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h5"/><path d="M14.5 4.5l5 5-8.5 8.5-5 1 1-5 7.5-9.5Z"/></svg></button>
+        <button class="tool-btn" data-tool="textbox" title="Caja de texto"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M8 9h8M12 9v6"/></svg></button>
+        <button class="tool-btn" data-tool="line" title="Línea"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M4 20 20 4"/></svg></button>
+        <button class="tool-btn" data-tool="arrow" title="Flecha"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 19 19 5M9 5h10v10"/></svg></button>
+      </div>
+
+      <!-- zoom controls -->
+      <div class="zoom-bar">
+        <button id="btn-zoom-out" class="zoom-btn" title="Alejar"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M5 12h14"/></svg></button>
+        <span class="zoom-label" id="zoom-label">100%</span>
+        <button id="btn-zoom-in" class="zoom-btn" title="Acercar"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button>
+        <span class="zoom-sep"></span>
+        <button id="btn-zoom-fit" class="zoom-fit" title="Ajustar al ancho"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3"/></svg>Ajustar</button>
+      </div>
+    </main>
+
+    <!-- RIGHT PANEL -->
+    <button class="rp-reopen" id="rp-reopen" title="Mostrar panel de propiedades">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg>
+    </button>
+    <aside class="panel-right">
+      <div class="rp-tabs">
+        <button class="rp-tab" data-tab="edicion">Edición</button>
+        <button class="rp-tab" data-tab="anotaciones">Anotaciones</button>
+        <button class="rp-tab" data-tab="extraccion">Extracción</button>
+        <button class="rp-tab" data-tab="ocr">OCR</button>
+        <button class="rp-collapse" id="rp-collapse" title="Ocultar panel">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
+        </button>
+      </div>
+      <div class="rp-body">
+
+        <!-- EDICIÓN -->
+        <div class="rp-panel" data-panel="edicion">
+          <div class="rp-empty" id="ed-none">
+            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#c2c8d0" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3l6.5 16 2.3-6.2L20 10.5 5 3Z"/></svg>
+            <div class="rp-empty-title">Ningún elemento seleccionado</div>
+            <div class="rp-empty-text">Haz clic en un texto, imagen o tabla del documento para editar sus propiedades.</div>
+          </div>
+
+          <div class="rp-section" id="ed-text" hidden>
+            <div class="ed-head"><span class="ed-title" id="sel-label"></span><span class="badge-edited" id="sel-edited-badge" hidden>Editado</span></div>
+            <div class="rp-label">Contenido</div>
+            <textarea id="sel-textarea" class="rp-textarea"></textarea>
+            <div class="rp-label">Fuente</div>
+            <select class="rp-select"><option>Segoe UI</option><option>Calibri</option><option>Arial</option><option>Times New Roman</option></select>
+            <div class="ed-font-row">
+              <div class="ed-size"><input value="15"><span>pt</span></div>
+              <div class="ed-biu">
+                <button class="ed-b">B</button>
+                <button class="ed-i">I</button>
+                <button class="ed-u">U</button>
+              </div>
+            </div>
+            <div class="rp-label">Alineación</div>
+            <div class="ed-align-row">
+              <button class="ed-align is-active"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 6h16M4 12h10M4 18h13"/></svg></button>
+              <button class="ed-align"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 6h16M7 12h10M6 18h12"/></svg></button>
+              <button class="ed-align"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 6h16M10 12h10M7 18h13"/></svg></button>
+            </div>
+            <div class="rp-label">Color de texto</div>
+            <div class="ed-colors">
+              <span class="ed-color is-active" style="background:#2b303a"></span>
+              <span class="ed-color" style="background:#2563a8"></span>
+              <span class="ed-color" style="background:#c0555a"></span>
+              <span class="ed-color" style="background:#2e9e6b"></span>
+              <span class="ed-color" style="background:#8a919c"></span>
+            </div>
+          </div>
+
+          <div class="rp-section" id="ed-image" hidden>
+            <div class="ed-title ed-title-solo">Imagen · logo_empresa.png</div>
+            <div class="ed-dim-row">
+              <div class="ed-dim"><div class="rp-label">Posición X</div><div class="ed-dim-box">58 px</div></div>
+              <div class="ed-dim"><div class="rp-label">Posición Y</div><div class="ed-dim-box">58 px</div></div>
+            </div>
+            <div class="ed-dim-row">
+              <div class="ed-dim"><div class="rp-label">Ancho</div><div class="ed-dim-box">158 px</div></div>
+              <div class="ed-dim"><div class="rp-label">Alto</div><div class="ed-dim-box">60 px</div></div>
+            </div>
+            <button id="btn-move-logo" class="btn-accent-block">Mover imagen (activar/desactivar)</button>
+            <button class="btn-ghost-block">Reemplazar imagen…</button>
+          </div>
+
+          <div class="rp-section" id="ed-table" hidden>
+            <div class="ed-title" style="margin-bottom:6px">Tabla · Conceptos</div>
+            <div class="ed-table-info">Estructura detectada: <strong>4 columnas × 4 filas</strong>. Para extraer o exportar sus datos, usa la pestaña Extracción.</div>
+            <button id="btn-goto-extract" class="btn-accent-block">Ir a Extracción →</button>
+          </div>
+        </div>
+
+        <!-- ANOTACIONES -->
+        <div class="rp-panel" data-panel="anotaciones">
+          <div class="rp-section">
+            <div class="rp-label">Herramienta</div>
+            <div class="an-grid">
+              <button class="an-tool" data-tool="highlight"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h5"/><path d="M14.5 4.5l5 5-8.5 8.5-5 1 1-5 7.5-9.5Z"/></svg>Resaltar</button>
+              <button class="an-tool" data-tool="line"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M4 16h16"/></svg>Subrayar</button>
+              <button class="an-tool" data-tool="textbox"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M8 9h8M12 9v6"/></svg>Caja de texto</button>
+              <button class="an-tool" data-tool="arrow"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 19 19 5M9 5h10v10"/></svg>Flecha</button>
+            </div>
+            <div class="rp-label">Color</div>
+            <div class="an-colors">
+              <span class="an-color is-active" data-color="#f2d024" style="background:#f2d024"></span>
+              <span class="an-color" data-color="#5bc47f" style="background:#5bc47f"></span>
+              <span class="an-color" data-color="#5aa9f0" style="background:#5aa9f0"></span>
+              <span class="an-color" data-color="#f08a8a" style="background:#f08a8a"></span>
+              <span class="an-color" data-color="#e07b39" style="background:#e07b39"></span>
+            </div>
+            <div class="rp-slider-head"><span class="rp-label rp-label-inline">Grosor</span><span class="rp-slider-val" id="thickness-val">3 px</span></div>
+            <input type="range" id="slider-thickness" min="1" max="10" value="3" class="rp-range">
+            <div class="rp-slider-head"><span class="rp-label rp-label-inline">Opacidad</span><span class="rp-slider-val" id="opacity-val">80 %</span></div>
+            <input type="range" id="slider-opacity" min="0" max="100" value="80" class="rp-range rp-range-last">
+            <div class="an-list">
+              <div class="rp-label">En esta página (3)</div>
+              <div class="an-item"><span class="an-chip" style="background:#f2d024"></span>Resaltado · «Auditoría de estados…»</div>
+              <div class="an-item"><span class="an-chip" style="background:#e07b39"></span>Nota · «Verificar cálculo de IVA»</div>
+              <div class="an-item"><span class="an-chip" style="background:#5aa9f0"></span>Flecha · sección Total</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- EXTRACCIÓN -->
+        <div class="rp-panel" data-panel="extraccion">
+          <div class="rp-section" id="ex-detected" hidden>
+            <div class="ex-head"><span class="ex-dot"></span><span class="ed-title">1 tabla detectada</span></div>
+            <div class="ex-info">4 columnas · 4 filas · <strong>98% confianza</strong></div>
+            <div class="ex-table-wrap">
+              <table class="ex-table">
+                <thead><tr><th class="th-left">Descripción</th><th>Cant.</th><th class="th-right">Importe</th></tr></thead>
+                <tbody>
+                  <tr><td>Consultoría contable</td><td class="td-center">1</td><td class="td-right">12,500.00</td></tr>
+                  <tr><td>Auditoría de estados…</td><td class="td-center">1</td><td class="td-right">24,000.00</td></tr>
+                  <tr><td>Declaración anual ISR</td><td class="td-center">1</td><td class="td-right">6,000.00</td></tr>
+                  <tr><td>Conciliación bancaria</td><td class="td-center">12</td><td class="td-right">6,400.00</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="ex-actions">
+              <button id="btn-excel" class="btn-excel"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 8l6 8M15 8l-6 8"/></svg>Excel</button>
+              <button id="btn-csv" class="btn-ex-secondary">CSV</button>
+              <button id="btn-copy" class="btn-ex-secondary">Copiar</button>
+            </div>
+            <button id="btn-redetect" class="btn-dashed">Detectar de nuevo</button>
+          </div>
+          <div class="rp-empty rp-empty-extract" id="ex-empty">
+            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#c2c8d0" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M9 4v16M15 4v16"/></svg>
+            <div class="rp-empty-title">Extracción de datos</div>
+            <div class="rp-empty-text rp-empty-text-gap">Detecta automáticamente tablas e imágenes estructuradas en la página actual para exportarlas.</div>
+            <button id="btn-detect" class="btn-primary-block">Detectar tablas</button>
+          </div>
+        </div>
+
+        <!-- OCR -->
+        <div class="rp-panel" data-panel="ocr">
+          <div class="rp-section">
+            <div class="rp-label">Idioma</div>
+            <select class="rp-select rp-select-gap"><option>Español</option><option>Inglés</option><option>Detección automática</option></select>
+            <div class="rp-label">Alcance</div>
+            <div class="scope-list">
+              <label class="scope-card" data-scope="sel"><span class="scope-radio"><span></span></span>Área seleccionada</label>
+              <label class="scope-card" data-scope="pg"><span class="scope-radio"><span></span></span>Página actual</label>
+              <label class="scope-card" data-scope="doc"><span class="scope-radio"><span></span></span>Documento completo</label>
+            </div>
+            <button id="btn-ocr-run" class="btn-primary-block btn-ocr-run">Ejecutar OCR</button>
+            <div id="ocr-result" hidden>
+              <div class="ocr-result-head"><span class="rp-label rp-label-inline">Texto reconocido</span><span class="ocr-confidence">98% confianza</span></div>
+              <textarea class="rp-textarea rp-textarea-ocr" id="ocr-text">FACTURA N.º F-2026-0847
+Fecha 09/07/2026
+Facturar a: Distribuidora Andina S.A.
+RFC: DAN-050916-Q2A
+Total: $56,724.00</textarea>
+              <button id="btn-ocr-insert" class="btn-accent-block btn-accent-nomargin">Insertar en el documento</button>
+            </div>
+            <div id="ocr-pending" class="ocr-pending">Selecciona el alcance y ejecuta el reconocimiento para editar el texto detectado.</div>
+          </div>
+        </div>
+
+      </div>
+    </aside>
+  </div>
+
+  <!-- ===== STATUS BAR ===== -->
+  <footer class="statusbar">
+    <span>Página <strong id="status-page">1</strong> de <span id="status-page-total">8</span></span>
+    <span class="sb-sep"></span>
+    <span class="sb-group">OCR: <strong id="ocr-status">Pendiente</strong></span>
+    <span class="sb-changes"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v5h5"/><path d="M3.5 8a9 9 0 1 0 2-3"/></svg><span id="change-text">0 ediciones · 0 imagen movida · 3 anotaciones</span></span>
+    <span class="sb-sep"></span>
+    <span>Zoom <strong id="status-zoom">100%</strong></span>
+  </footer>
+
+  <!-- ===== OCR MODAL ===== -->
+  <div class="overlay" id="modal-ocr">
+    <div class="modal modal-ocr">
+      <div class="modal-head">
+        <div class="modal-head-title"><span class="modal-icon"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8V5.6A1.6 1.6 0 0 1 5.6 4H8M16 4h2.4A1.6 1.6 0 0 1 20 5.6V8M20 16v2.4a1.6 1.6 0 0 1-1.6 1.6H16M8 20H5.6A1.6 1.6 0 0 1 4 18.4V16M7 12h10"/></svg></span><span class="modal-title">Reconocimiento óptico (OCR)</span></div>
+        <button class="modal-close" data-close>✕</button>
+      </div>
+      <div class="modal-ocr-body">
+        <div class="modal-ocr-preview">
+          <div class="ocr-thumb">
+            <div class="sk-title-lg"></div>
+            <div class="sk-line-lg w90"></div>
+            <div class="sk-line-lg w82"></div>
+            <div class="sk-line-lg w88 sk-gap"></div>
+            <div class="sk-block-dashed"></div>
+          </div>
+          <div class="ocr-thumb-caption">Página <span class="modal-active-page">1</span> · vista previa</div>
+        </div>
+        <div class="modal-ocr-opts">
+          <div class="rp-label">Alcance</div>
+          <div class="scope-list scope-list-modal">
+            <label class="scope-card" data-scope="doc"><span class="scope-radio"><span></span></span><span>Documento completo (<span class="modal-page-total">8</span> páginas)</span></label>
+            <label class="scope-card" data-scope="pg"><span class="scope-radio"><span></span></span>Solo página actual</label>
+            <label class="scope-card" data-scope="sel"><span class="scope-radio"><span></span></span>Área seleccionada</label>
+          </div>
+          <div class="rp-label">Idioma</div>
+          <select class="rp-select rp-select-modal"><option>Español</option><option>Inglés</option><option>Detección automática</option></select>
+          <label class="checkbox checked"><span class="checkbox-box"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 6"/></svg></span>Corregir orientación automáticamente</label>
+          <label class="checkbox checked checkbox-last"><span class="checkbox-box"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 6"/></svg></span>Mantener el formato original</label>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn-modal-cancel" data-close>Cancelar</button>
+        <button id="btn-ocr-run-modal" class="btn-modal-primary">Ejecutar OCR</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== EXPORT MODAL ===== -->
+  <div class="overlay" id="modal-export">
+    <div class="modal modal-export">
+      <div class="modal-head">
+        <div class="modal-head-title"><span class="modal-icon"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M8 11l4 4 4-4"/><path d="M5 19h14"/></svg></span><span class="modal-title">Exportar documento</span></div>
+        <button class="modal-close" data-close>✕</button>
+      </div>
+      <div class="modal-export-body">
+        <div class="rp-label">Formato</div>
+        <div class="fmt-row">
+          <button class="fmt-card" data-fmt="word">
+            <span class="fmt-icon" style="background:#2b5797">W</span>
+            <span class="fmt-name">Word</span><span class="fmt-desc">.docx editable</span>
+          </button>
+          <button class="fmt-card" data-fmt="excel">
+            <span class="fmt-icon" style="background:#217346">X</span>
+            <span class="fmt-name">Excel</span><span class="fmt-desc">Tablas y datos</span>
+          </button>
+          <button class="fmt-card" data-fmt="html">
+            <span class="fmt-icon" style="background:#e07b39">&lt;/&gt;</span>
+            <span class="fmt-name">HTML</span><span class="fmt-desc">Página web</span>
+          </button>
+        </div>
+        <div class="export-opts-row">
+          <div class="export-opt"><div class="rp-label">Rango de páginas</div><input id="export-range" class="rp-input" value="1-8"></div>
+          <div class="export-opt"><div class="rp-label">Calidad de imagen</div><select class="rp-select rp-select-flat"><option>Alta (300 dpi)</option><option>Media (150 dpi)</option></select></div>
+        </div>
+        <label class="checkbox checked"><span class="checkbox-box"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 6"/></svg></span>Incluir anotaciones</label>
+        <label class="checkbox checked checkbox-last"><span class="checkbox-box"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 6"/></svg></span>Mantener el texto editable</label>
+      </div>
+      <div class="modal-foot">
+        <button class="btn-modal-cancel" data-close>Cancelar</button>
+        <button id="btn-export-run" class="btn-modal-primary btn-modal-export"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M8 11l4 4 4-4M5 19h14"/></svg>Exportar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== SPLIT MODAL ===== -->
+  <div class="overlay" id="modal-split">
+    <div class="modal modal-split">
+      <div class="modal-head">
+        <div class="modal-head-title"><span class="modal-icon"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.4"/><circle cx="6" cy="18" r="2.4"/><path d="M7.9 7.5 20 18M7.9 16.5 20 6"/></svg></span><span class="modal-title">Separar documento</span></div>
+        <button class="modal-close" data-close>✕</button>
+      </div>
+      <div class="modal-split-body">
+        <div class="split-hint">Cada grupo se guarda como un PDF independiente. Selecciona un grupo y haz clic en las miniaturas para marcar sus páginas, o escribe rangos como <code>1-3, 7, 10-12</code>. El documento tiene <strong><span class="modal-page-total">–</span> páginas</strong>.</div>
+        <div class="split-head-row"><span></span><span class="rp-label rp-label-inline">Nombre del archivo</span><span class="rp-label rp-label-inline">Páginas</span><span></span></div>
+        <div id="split-groups"></div>
+        <button id="btn-add-group" class="btn-dashed">+ Agregar grupo</button>
+        <div class="rp-label split-grid-label">Páginas · clic para marcarlas en el grupo activo</div>
+        <div id="split-grid" class="split-grid"></div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn-modal-cancel" data-close>Cancelar</button>
+        <button id="btn-split-run" class="btn-modal-primary btn-modal-export"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.4"/><circle cx="6" cy="18" r="2.4"/><path d="M7.9 7.5 20 18M7.9 16.5 20 6"/></svg>Separar en grupos</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== PAGE PREVIEW (zoom desde el modal Separar) ===== -->
+  <div class="preview-overlay" id="page-preview" hidden>
+    <div class="preview-top">
+      <span class="preview-label" id="preview-label">Página 1</span>
+      <button class="preview-check" id="preview-check"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 6"/></svg><span id="preview-check-text">Marcar en el grupo activo</span></button>
+      <button class="preview-close" id="preview-close" title="Cerrar (Esc)">✕</button>
+    </div>
+    <button class="preview-nav preview-nav-prev" id="preview-prev" title="Página anterior">‹</button>
+    <div class="preview-body" id="preview-body">
+      <img id="preview-img" alt="Vista previa de la página" draggable="false">
+    </div>
+    <button class="preview-nav preview-nav-next" id="preview-next" title="Página siguiente">›</button>
+    <div class="preview-hint">‹ › para navegar · Enter marca/desmarca · clic o Ctrl+rueda para acercar · Esc para cerrar</div>
+  </div>
+
+  <!-- ===== CONFIRMAR CIERRE ===== -->
+  <div class="overlay" id="modal-close-confirm">
+    <div class="modal modal-confirm">
+      <div class="confirm-body">
+        <div class="confirm-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4M12 17h.01"/></svg></div>
+        <div>
+          <div class="confirm-title">¿Guardar los cambios?</div>
+          <div class="confirm-text">Hay cambios sin guardar en <strong id="confirm-file">el documento</strong>. Si cierras sin guardar, se perderán.</div>
+        </div>
+      </div>
+      <div class="modal-foot confirm-foot">
+        <button id="confirm-discard" class="btn-modal-cancel confirm-discard">No guardar</button>
+        <div class="confirm-foot-right">
+          <button id="confirm-cancel" class="btn-modal-cancel">Cancelar</button>
+          <button id="confirm-save" class="btn-modal-primary">Guardar y cerrar</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+</div>
+<script src="app.js"></script>
+</body>
+</html>
