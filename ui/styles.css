@@ -9,6 +9,7 @@ a{color:#2563a8}a:hover{color:#1d5290}
 ::-webkit-scrollbar-track{background:transparent}
 
 #app{height:100vh;min-width:1180px;display:flex;flex-direction:column;background:#eceef1;overflow:hidden;position:relative}
+.is-hidden{display:none !important}
 
 /* ===== Titlebar ===== */
 .titlebar{height:36px;flex:none;background:#2b303a;display:flex;align-items:center;padding:0 4px 0 12px;gap:10px;color:#c7ccd4;font-size:12.5px;user-select:none}
@@ -23,6 +24,21 @@ a{color:#2563a8}a:hover{color:#1d5290}
 .win-min-icon{width:11px;height:1px;background:#c7ccd4}
 .win-max-icon{width:10px;height:10px;border:1px solid #c7ccd4}
 
+/* ===== Pestañas (multi-documento) ===== */
+.tabstrip{height:36px;flex:none;background:#e4e7ec;border-bottom:1px solid #d3d8e0;display:flex;align-items:flex-end;padding:0 6px;gap:2px;user-select:none;overflow:hidden}
+.tabstrip.is-hidden{display:none}
+.tab-list{display:flex;align-items:flex-end;gap:2px;overflow-x:auto;overflow-y:hidden;flex:1;min-width:0;scrollbar-width:none}
+.tab-list::-webkit-scrollbar{height:0}
+.tab{display:flex;align-items:center;gap:7px;height:30px;max-width:220px;min-width:110px;padding:0 8px 0 12px;background:#d0d5dd;color:#4a5160;border:1px solid #c2c8d2;border-bottom:none;border-radius:8px 8px 0 0;font-size:12.5px;cursor:default;flex:0 1 auto}
+.tab:hover{background:#dce0e7}
+.tab.is-active{background:#fff;color:#1f2430;border-color:#d3d8e0;font-weight:600}
+.tab-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tab-dirty{width:8px;height:8px;border-radius:50%;background:#e0913a;flex:none}
+.tab-close{width:18px;height:18px;display:flex;align-items:center;justify-content:center;border-radius:4px;font-size:12px;color:#8a909c;flex:none}
+.tab-close:hover{background:rgba(0,0,0,.12);color:#33383f}
+.tab-new{width:30px;height:30px;flex:none;margin-left:2px;border:none;background:transparent;color:#5a6070;font-size:19px;line-height:1;border-radius:7px;cursor:pointer}
+.tab-new:hover{background:#d0d5dd;color:#2b303a}
+
 /* ===== Toolbar ===== */
 .toolbar{height:56px;flex:none;background:#fff;border-bottom:1px solid #dde1e7;display:flex;align-items:center;padding:0 12px;gap:3px;z-index:30}
 .btn-primary{display:inline-flex;align-items:center;gap:7px;height:36px;padding:0 13px;border:none;border-radius:7px;background:#2563a8;color:#fff;font-weight:600;font-size:13px;cursor:pointer}
@@ -32,6 +48,7 @@ a{color:#2563a8}a:hover{color:#1d5290}
 .btn-toolbar:hover{background:#eef1f5}
 .btn-icon36{width:36px;height:36px;display:inline-flex;align-items:center;justify-content:center;border:1px solid transparent;border-radius:7px;background:transparent;color:#3a414b;cursor:pointer}
 .btn-icon36:hover{background:#eef1f5}
+.btn-icon36.is-active{background:#e7eef8;color:#2563a8;border-color:#cfe0f3}
 .btn-icon36.is-disabled{color:#9aa1ac}
 .toolbar-right{margin-left:auto;display:flex;align-items:center;gap:8px}
 .search-box{display:flex;align-items:center;gap:8px;height:36px;padding:0 12px;background:#f2f4f7;border:1px solid #dde1e7;border-radius:8px;width:250px}
@@ -42,6 +59,8 @@ a{color:#2563a8}a:hover{color:#1d5290}
 
 /* ===== Left panel ===== */
 .panel-left{width:232px;flex:none;background:#fff;border-right:1px solid #dde1e7;display:flex;flex-direction:column;min-height:0}
+/* Paneles laterales ocultables: colapsan a 0 con transición suave. */
+.panel-left.is-collapsed,.panel-right.is-collapsed{width:0;min-width:0;border:none;overflow:hidden}
 .panel-left-head{height:44px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 14px;border-bottom:1px solid #eef0f3}
 .panel-title{font-weight:600;font-size:12px;letter-spacing:.04em;color:#3a414b;text-transform:uppercase}
 .panel-sub{font-size:12px;color:#9aa1ac}

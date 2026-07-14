@@ -18,7 +18,7 @@
     <span class="titlebar-app">PDF Editor Pro</span>
     <span class="titlebar-sep">—</span>
     <span class="titlebar-file" id="file-name">Factura_F-2026-0847.pdf</span>
-    <span class="titlebar-drag pywebview-drag-region"></span>
+    <span class="titlebar-drag" id="titlebar-drag"></span>
     <div class="titlebar-controls">
       <div class="win-btn" id="win-minimize" title="Minimizar"><span class="win-min-icon"></span></div>
       <div class="win-btn" id="win-maximize" title="Maximizar"><span class="win-max-icon"></span></div>
@@ -26,8 +26,18 @@
     </div>
   </header>
 
+  <!-- ===== PESTAÑAS ===== -->
+  <div class="tabstrip is-hidden" id="tabstrip">
+    <div class="tab-list" id="tab-list"></div>
+    <button class="tab-new" id="btn-new-tab" title="Abrir otro PDF en una pestaña nueva">+</button>
+  </div>
+
   <!-- ===== TOOLBAR ===== -->
   <div class="toolbar">
+    <button id="btn-toggle-left" class="btn-icon36" title="Mostrar u ocultar el panel de páginas">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></svg>
+    </button>
+    <span class="tb-sep"></span>
     <button id="btn-open" class="btn-primary" title="Abrir un documento PDF">
       <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v1"/><path d="M3 9h16.6l-1.9 8a2 2 0 0 1-2 1.6H4.9a2 2 0 0 1-2-1.6L3 9Z"/></svg>Abrir PDF
     </button>
@@ -68,6 +78,9 @@
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#8a919c" stroke-width="1.8" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.6-3.6"/></svg>
         <input placeholder="Buscar texto en el documento…">
       </div>
+      <button id="btn-toggle-right" class="btn-icon36" title="Mostrar u ocultar el panel de propiedades">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/></svg>
+      </button>
     </div>
   </div>
 
@@ -75,7 +88,7 @@
   <div class="middle">
 
     <!-- LEFT PANEL -->
-    <aside class="panel-left">
+    <aside class="panel-left" id="panel-left">
       <div class="panel-left-head">
         <span class="panel-title">Páginas</span>
         <span class="panel-sub" id="page-count">8 páginas</span>
@@ -213,7 +226,11 @@
         <button class="tool-btn" data-tool="textbox" title="Caja de texto"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M8 9h8M12 9v6"/></svg></button>
         <button class="tool-btn" data-tool="line" title="Línea"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M4 20 20 4"/></svg></button>
         <button class="tool-btn" data-tool="arrow" title="Flecha"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 19 19 5M9 5h10v10"/></svg></button>
+        <button class="tool-btn" data-tool="sign" id="tool-sign" title="Firmar (importar imagen PNG)"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 19c3-1 4-9 7-9 2 0 1 4 3 4 2 0 3-4 5-4"/><path d="M3 21h18"/></svg></button>
+        <button class="tool-btn is-hidden" id="tool-sign-change" title="Cambiar la imagen de firma"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg></button>
       </div>
+      <!-- selector de archivo oculto para importar la firma PNG -->
+      <input type="file" id="sign-file" accept="image/png,image/*" hidden>
 
       <!-- zoom controls -->
       <div class="zoom-bar">
@@ -229,7 +246,7 @@
     <button class="rp-reopen" id="rp-reopen" title="Mostrar panel de propiedades">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg>
     </button>
-    <aside class="panel-right">
+    <aside class="panel-right" id="panel-right">
       <div class="rp-tabs">
         <button class="rp-tab" data-tab="edicion">Edición</button>
         <button class="rp-tab" data-tab="anotaciones">Anotaciones</button>
@@ -528,6 +545,26 @@ Total: $56,724.00</textarea>
         <div class="confirm-foot-right">
           <button id="confirm-cancel" class="btn-modal-cancel">Cancelar</button>
           <button id="confirm-save" class="btn-modal-primary">Guardar y cerrar</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== ELEGIR MODO DE FUSIÓN ===== -->
+  <div class="overlay" id="modal-merge-choice">
+    <div class="modal modal-confirm">
+      <div class="confirm-body">
+        <div class="confirm-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v1"/><path d="M12 11v6M9 14l3 3 3-3"/></svg></div>
+        <div>
+          <div class="confirm-title">¿Cómo quieres fusionar?</div>
+          <div class="confirm-text">Elige uno o varios PDFs (puedes seleccionar varios con Ctrl o Mayús) y decide si añadir sus páginas al documento actual o crear un documento nuevo combinándolos.</div>
+        </div>
+      </div>
+      <div class="modal-foot confirm-foot">
+        <button id="merge-cancel" class="btn-modal-cancel">Cancelar</button>
+        <div class="confirm-foot-right">
+          <button id="merge-current" class="btn-modal-cancel">Fusionar en el actual</button>
+          <button id="merge-new" class="btn-modal-primary">Crear uno nuevo</button>
         </div>
       </div>
     </div>

@@ -24,6 +24,18 @@ Set-Location -LiteralPath $PSScriptRoot
 
 function Step($msg) { Write-Host "==> $msg" -ForegroundColor Cyan }
 
+# --- Cerrar instancias en ejecucion -----------------------------------------
+# Si la app compilada sigue abierta, Windows bloquea los DLL dentro de dist\ y
+# PyInstaller falla al limpiar con "Acceso denegado" (WinError 5). Cerramos
+# cualquier PDFEditorPro.exe vivo antes de tocar dist\.
+$running = Get-Process -Name PDFEditorPro -ErrorAction SilentlyContinue
+if ($running) {
+    Step "Cerrando $($running.Count) instancia(s) de PDFEditorPro en ejecucion"
+    $running | Stop-Process -Force -ErrorAction SilentlyContinue
+    # Dar un momento a Windows para liberar los handles de los DLL bloqueados.
+    Start-Sleep -Milliseconds 800
+}
+
 # --- Interprete de Python ---------------------------------------------------
 # En Windows, "python" suele ser el alias-senuelo del Microsoft Store: existe en
 # el PATH pero al ejecutarlo falla (exit 9009) en vez de arrancar Python. El

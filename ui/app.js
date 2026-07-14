@@ -3,10 +3,19 @@
 /* ===== Estado ===== */
 const state = {
   fileName: 'Factura_F-2026-0847.pdf',
-  doc: null,               // null (demo) | {name, path, count, dirty, rev}
+  // --- Pestañas (multi-documento, estilo Adobe) ---
+  // Cada pestaña: {id, doc, fileName, activePage, pageSize}. Con 0 pestañas se
+  // muestra el modo demo. state.doc/fileName/activePage/pageSize son un ESPEJO
+  // de la pestaña activa, sincronizado en activateTab() para no reescribir todo.
+  tabs: [],
+  activeTabId: null,
+  doc: null,               // null (demo) | {name, path, count, dirty, rev, docId}
   pageSize: null,          // {width, height} en puntos, página activa del PDF real
   activePage: 1,
   rightTab: 'edicion',
+  leftHidden: false,       // panel de páginas (izquierda) oculto
+  rightHidden: false,      // panel de propiedades (derecha) oculto
+  readingModeApplied: false, // el modo lectura se aplica solo en la 1ª apertura
   selected: null,          // demo: null | 'logo' | 'table' | 'invnum' | 'invdate' | 'client' | 'total'
   tool: 'select',          // select | highlight | textbox | line | arrow
   zoom: 100,
@@ -20,6 +29,7 @@ const state = {
   ocrScope: 'doc',         // doc | pg | sel
   exportFmt: 'word',       // word | excel | html
   annotColor: '#f2d024',
+  signImage: null,         // data URL del PNG de firma importado (modo firmar)
   pages: [
     { edited: true, annot: true },
     {},
@@ -58,14 +68,29 @@ const PAGE_DISPLAY_WIDTH = 768;
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 
+// Endpoints de ciclo de vida que NO se refieren a una pestaña concreta.
+const NO_DOC_ID = ['/api/open', '/api/docs', '/api/window'];
+
+// Añade ?docId=<pestaña activa> a las URLs de /api/ que operan sobre un
+// documento, para que cada petición vaya a la pestaña correcta. Así los
+// callsites (api.get/api.post) no necesitan pasar el docId a mano.
+function withDocId(url) {
+  if (!url.startsWith('/api/')) return url;
+  const path = url.split('?')[0];
+  if (NO_DOC_ID.includes(path)) return url;
+  if (state.activeTabId == null) return url;
+  const sep = url.includes('?') ? '&' : '?';
+  return `${url}${sep}docId=${encodeURIComponent(state.activeTabId)}`;
+}
+
 const api = {
   async get(url) {
-    const r = await fetch(url);
+    const r = await fetch(withDocId(url));
     if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
     return r.json();
   },
   async post(url, body) {
-    const r = await fetch(url, {
+    const r = await fetch(withDocId(url), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body || {}),
@@ -75,6 +100,13 @@ const api = {
   },
 };
 
+// URL de imagen (miniaturas/página) para la pestaña activa. Los <img src> no
+// pasan por `api`, así que aquí añadimos docId (y el rev lo pone el llamador).
+function imgUrl(path) {
+  const sep = path.includes('?') ? '&' : '?';
+  return state.activeTabId == null ? path : `${path}${sep}docId=${encodeURIComponent(state.activeTabId)}`;
+}
+
 const inDoc = () => !!state.doc;
 const pageCount = () => (inDoc() ? state.doc.count : state.pages.length);
 
@@ -83,32 +115,114 @@ function setState(patch) {
   render();
 }
 
-/* ===== Documento real ===== */
-async function applyDoc(info, { resetPage = false } = {}) {
-  if (!info || !info.open) return;
-  const first = !state.doc;
-  state.doc = info;
-  state.fileName = info.name;
-  if (first || resetPage) state.activePage = 1;
-  state.activePage = Math.min(state.activePage, info.count);
+/* ===== Pestañas (multi-documento) ===== */
+const activeTab = () => state.tabs.find(t => t.id === state.activeTabId) || null;
+
+// Vuelca el sub-estado de la pestaña activa a los espejos globales que lee
+// el resto del render (state.doc, fileName, activePage, pageSize).
+function syncMirror() {
+  const t = activeTab();
+  if (t) {
+    state.doc = t.doc;
+    state.fileName = t.fileName;
+    state.activePage = t.activePage;
+    state.pageSize = t.pageSize;
+    $('#export-range').value = `1-${t.doc.count}`;
+  } else {
+    // Sin pestañas: modo demo.
+    state.doc = null;
+    state.fileName = 'Documento.pdf';
+    state.activePage = 1;
+    state.pageSize = null;
+  }
+}
+
+// Crea (o actualiza) una pestaña a partir de un info del backend y devuelve su id.
+function upsertTab(info, { resetPage = false } = {}) {
+  let t = state.tabs.find(x => x.id === info.docId);
+  if (!t) {
+    t = { id: info.docId, doc: info, fileName: info.name, activePage: 1, pageSize: null };
+    state.tabs.push(t);
+  } else {
+    t.doc = info;
+    t.fileName = info.name;
+    if (resetPage) t.activePage = 1;
+  }
+  t.activePage = Math.min(Math.max(1, t.activePage), info.count);
+  return t.id;
+}
+
+// Activa una pestaña: sincroniza espejos, carga tamaño de página y re-renderiza.
+async function activateTab(id) {
+  state.activeTabId = id;
   state.selected = null;
   state.ctx = null;
-  $('#export-range').value = `1-${info.count}`;
-  try {
-    state.pageSize = await api.get(`/api/pagesize/${state.activePage - 1}`);
-  } catch { state.pageSize = null; }
+  syncMirror();
+  const t = activeTab();
+  if (t) {
+    try {
+      t.pageSize = await api.get(`/api/pagesize/${t.activePage - 1}`);
+    } catch { t.pageSize = null; }
+    state.pageSize = t.pageSize;
+  }
   render();
+}
+
+/* ===== Documento real ===== */
+// Aplica un info a SU pestaña (por docId). Si es la pestaña activa, refresca la
+// vista; si no existe la pestaña aún, la crea (apertura) y la activa.
+async function applyDoc(info, { resetPage = false } = {}) {
+  if (!info || !info.open) return;
+  // Muchos endpoints (undo, save, annot, pages…) devuelven pdf.info() SIN docId,
+  // porque operan sobre la pestaña activa. Si falta, asumimos la activa.
+  if (info.docId == null) info.docId = state.activeTabId;
+  const id = upsertTab(info, { resetPage });
+  if (id === state.activeTabId || state.activeTabId == null) {
+    await activateTab(id);
+  } else {
+    render();  // pestaña de fondo: basta con refrescar la tira de pestañas
+  }
+}
+
+// Modo lectura al abrir un PDF nuevo: ventana maximizada, paneles ocultos y el
+// documento ajustado al ancho para que se vea grande. Solo se aplica en la
+// PRIMERA apertura de la sesión; después respetamos cómo dejó el usuario los
+// paneles y el zoom.
+async function enterReadingMode() {
+  if (state.readingModeApplied) return;
+  state.readingModeApplied = true;
+  // Maximizar la ventana (solo en la app de escritorio).
+  const bridge = window.pywebview && window.pywebview.api;
+  if (bridge && bridge.maximize_window) {
+    try { await bridge.maximize_window(); } catch {}
+  }
+  state.leftHidden = true;
+  state.rightHidden = true;
+  render();
+  // Tras aplicar el layout (paneles ocultos), ajustar el zoom al ancho.
+  requestAnimationFrame(() => {
+    const z = fitZoomToWidth();
+    if (z !== state.zoom) setState({ zoom: z }); else render();
+  });
 }
 
 async function openPdf() {
   try {
-    const info = await api.post('/api/open', {});
-    if (info.cancelled) {
+    const r = await api.post('/api/open', {});
+    if (r.cancelled) {
       if (!window.pywebview) toast('El diálogo de apertura requiere la app de escritorio');
       return;
     }
-    await applyDoc(info, { resetPage: true });
-    toast(`«${info.name}» abierto · ${info.count} páginas`);
+    // El backend puede devolver varias pestañas (selección múltiple).
+    const opened = r.docs || [r.doc || r];
+    for (const info of opened) upsertTab(info, { resetPage: true });
+    await activateTab(opened[0].docId);   // activa la primera abierta
+    await enterReadingMode();
+    if (opened.length === 1) {
+      toast(`«${opened[0].name}» abierto · ${opened[0].count} páginas`);
+    } else {
+      toast(`${opened.length} documentos abiertos en pestañas`);
+    }
   } catch (e) {
     toast('No se pudo abrir el PDF: ' + e.message);
   }
@@ -128,10 +242,43 @@ async function saveDoc(saveAs) {
   }
 }
 
-// Cierre: si hay cambios sin guardar muestra el diálogo; si no, cierra directo.
+// Cierra una pestaña concreta. Si tiene cambios, pide confirmación primero.
+async function closeTab(id) {
+  const t = state.tabs.find(x => x.id === id);
+  if (!t) return;
+  if (t.doc && t.doc.dirty) {
+    pendingClose = { kind: 'tab', id };
+    $('#confirm-file').textContent = t.fileName;
+    $('#modal-close-confirm').classList.add('is-open');
+    return;
+  }
+  await discardAndCloseTab(id);
+}
+
+// Cierra la pestaña en el backend y en la UI, activando una vecina.
+async function discardAndCloseTab(id) {
+  const idx = state.tabs.findIndex(x => x.id === id);
+  if (idx < 0) return;
+  try { await api.post(`/api/close?docId=${encodeURIComponent(id)}`, {}); } catch {}
+  state.tabs.splice(idx, 1);
+  if (state.activeTabId === id) {
+    const next = state.tabs[idx] || state.tabs[idx - 1] || null;
+    await activateTab(next ? next.id : null);
+  } else {
+    render();
+  }
+}
+
+// Estado del diálogo de cierre: qué se está cerrando (una pestaña o la ventana).
+let pendingClose = null;
+
+// Cierre de la VENTANA: si alguna pestaña tiene cambios, pide confirmación.
 function requestClose() {
-  if (inDoc() && state.doc.dirty) {
-    $('#confirm-file').textContent = state.fileName;
+  const dirty = state.tabs.filter(t => t.doc && t.doc.dirty);
+  if (dirty.length) {
+    pendingClose = { kind: 'window' };
+    const names = dirty.map(t => t.fileName).join(', ');
+    $('#confirm-file').textContent = names;
     $('#modal-close-confirm').classList.add('is-open');
   } else {
     api.post('/api/window', { action: 'close' }).catch(() => {});
@@ -139,12 +286,15 @@ function requestClose() {
 }
 
 async function changePage(n) {
+  const t = activeTab();
   state.activePage = n;
+  if (t) t.activePage = n;
   state.selected = null;
   state.ctx = null;
   if (inDoc()) {
     try {
       state.pageSize = await api.get(`/api/pagesize/${n - 1}`);
+      if (t) t.pageSize = state.pageSize;
     } catch { state.pageSize = null; }
   }
   render();
@@ -153,6 +303,8 @@ async function changePage(n) {
 /* ===== Render ===== */
 function render() {
   renderTitlebar();
+  renderTabs();
+  renderPanels();
   renderPages();
   renderDoc();
   renderContextMenus();
@@ -165,7 +317,39 @@ function render() {
 }
 
 function renderTitlebar() {
-  $('#file-name').textContent = state.fileName;
+  // El nombre del documento vive ahora en la pestaña activa; en la barra de
+  // título mostramos el de la pestaña activa (o el de bienvenida en modo demo).
+  $('#file-name').textContent = state.tabs.length ? state.fileName : 'Sin documento';
+}
+
+// Dibuja la tira de pestañas (una por documento) + botón «nueva».
+function renderTabs() {
+  const strip = $('#tab-list');
+  if (!strip) return;
+  strip.innerHTML = '';
+  for (const t of state.tabs) {
+    const el = document.createElement('div');
+    el.className = 'tab' + (t.id === state.activeTabId ? ' is-active' : '');
+    el.dataset.tab = t.id;
+    el.title = t.fileName;
+    const dot = (t.doc && t.doc.dirty) ? '<span class="tab-dirty" title="Cambios sin guardar"></span>' : '';
+    el.innerHTML =
+      `${dot}<span class="tab-name">${escapeHtml(t.fileName)}</span>` +
+      `<span class="tab-close" title="Cerrar pestaña">✕</span>`;
+    el.addEventListener('click', ev => {
+      if (ev.target.classList.contains('tab-close')) { ev.stopPropagation(); closeTab(t.id); return; }
+      if (t.id !== state.activeTabId) activateTab(t.id);
+    });
+    strip.appendChild(el);
+  }
+  // La tira se oculta si no hay pestañas (modo demo/bienvenida).
+  const wrap = $('#tabstrip');
+  if (wrap) wrap.classList.toggle('is-hidden', state.tabs.length === 0);
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
 function renderPages() {
@@ -181,7 +365,7 @@ function renderPages() {
     if (inDoc()) {
       inner =
         `<div class="page-thumb-wrap">` +
-          `<img class="page-thumb-img" loading="lazy" src="/api/thumb/${i}?r=${state.doc.rev}" alt="Página ${n}">` +
+          `<img class="page-thumb-img" loading="lazy" src="${imgUrl(`/api/thumb/${i}?r=${state.doc.rev}`)}" alt="Página ${n}">` +
           `<span class="page-active-ring"></span>` +
         `</div>`;
     } else {
@@ -223,8 +407,8 @@ function renderDoc() {
     // Resolución de render acorde al zoom (nítido al acercar): 100%→2x … 300%→6x
     const targetScale = Math.min(6, Math.max(2, Math.ceil(state.zoom / 50)));
     const img = $('#page-image');
-    const key = `${state.activePage - 1}|${state.doc.rev}`;
-    const baseSrc = `/api/page/${state.activePage - 1}?r=${state.doc.rev}`;
+    const key = `${state.activeTabId}|${state.activePage - 1}|${state.doc.rev}`;
+    const baseSrc = imgUrl(`/api/page/${state.activePage - 1}?r=${state.doc.rev}`);
     if (loadedPageKey !== key) {
       // Página o revisión nueva: carga inmediata
       loadedPageKey = key;
@@ -248,7 +432,7 @@ function renderDoc() {
     if (drawing) hideSelPopup();
     if (loadedTextKey !== key) {
       loadedTextKey = key;
-      loadTextLayer(state.activePage - 1);
+      loadTextLayer(state.activePage - 1, key);
     }
     return;
   }
@@ -269,10 +453,36 @@ function renderContextMenus() {
   });
 }
 
+function renderPanels() {
+  const left = $('#panel-left');
+  const right = $('#panel-right');
+  if (left) left.classList.toggle('is-collapsed', state.leftHidden);
+  if (right) right.classList.toggle('is-collapsed', state.rightHidden);
+  const lb = $('#btn-toggle-left');
+  const rb = $('#btn-toggle-right');
+  if (lb) lb.classList.toggle('is-active', !state.leftHidden);
+  if (rb) rb.classList.toggle('is-active', !state.rightHidden);
+}
+
 function renderTools() {
   $$('.tool-btn').forEach(b => b.classList.toggle('is-active', b.dataset.tool === state.tool));
   $$('.an-tool').forEach(b => b.classList.toggle('is-active', b.dataset.tool === state.tool));
   $$('.an-color').forEach(s => s.classList.toggle('is-active', s.dataset.color === state.annotColor));
+  // El botón «cambiar firma» solo aparece cuando ya hay una firma recordada.
+  const changeBtn = $('#tool-sign-change');
+  if (changeBtn) changeBtn.classList.toggle('is-hidden', !state.signImage);
+}
+
+// Calcula el zoom «ajustar al ancho»: la página llena el ancho visible del
+// lienzo (con un pequeño margen), de modo que se vea lo más grande posible
+// horizontalmente. Acotado a 40–300. Requiere el layout ya aplicado.
+function fitZoomToWidth() {
+  const scroller = $('#canvas-scroll');
+  if (!scroller) return state.zoom;
+  const availW = scroller.clientWidth - 64;   // margen lateral cómodo
+  if (availW <= 0) return state.zoom;
+  const z = Math.round((availW / PAGE_DISPLAY_WIDTH) * 100);
+  return Math.max(40, Math.min(300, z));
 }
 
 function renderZoom() {
@@ -532,7 +742,7 @@ function buildSplitGrid() {
     tile.className = 'split-tile';
     tile.dataset.page = i;
     tile.innerHTML =
-      `<img loading="lazy" src="/api/thumb/${i}?r=${state.doc.rev}" alt="Página ${i + 1}">` +
+      `<img loading="lazy" src="${imgUrl(`/api/thumb/${i}?r=${state.doc.rev}`)}" alt="Página ${i + 1}">` +
       `<span class="split-tile-num">${i + 1}</span>` +
       `<span class="split-tile-check"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 6"/></svg></span>` +
       `<span class="split-tile-dots"></span>` +
@@ -583,7 +793,7 @@ function previewOpen() {
 function renderPagePreview() {
   const i = previewState.page;
   const count = state.doc.count;
-  $('#preview-img').src = `/api/page/${i}?r=${state.doc.rev}&scale=3`;
+  $('#preview-img').src = imgUrl(`/api/page/${i}?r=${state.doc.rev}&scale=3`);
   $('#preview-label').textContent = `Página ${i + 1} de ${count}`;
   $('#preview-prev').classList.toggle('is-disabled', i === 0);
   $('#preview-next').classList.toggle('is-disabled', i === count - 1);
@@ -878,6 +1088,62 @@ async function commitAnnot(text) {
   }
 }
 
+/* ===== Firma (importar PNG) ===== */
+// Paso 1: si ya hay una firma importada en esta sesión, la reutiliza y entra en
+// modo colocar; si no, pide el PNG. Requiere un documento abierto.
+function startSignature() {
+  if (!inDoc()) { toast('Abre un PDF para firmar'); return; }
+  if (state.signImage) {
+    setState({ tool: 'sign' });
+    toast('Dibuja el recuadro para colocar la firma · «Cambiar firma» para importar otra');
+  } else {
+    importSignature();
+  }
+}
+
+// Abre el selector para importar (o reemplazar) el PNG de la firma.
+function importSignature() {
+  if (!inDoc()) { toast('Abre un PDF para firmar'); return; }
+  $('#sign-file').click();
+}
+
+// Lee el PNG elegido, lo recuerda y entra en modo «colocar firma».
+function onSignFileChosen(e) {
+  const file = e.target.files && e.target.files[0];
+  e.target.value = '';   // permite volver a elegir el mismo archivo
+  if (!file) return;
+  if (!file.type.startsWith('image/')) { toast('Elige una imagen (PNG)'); return; }
+  const reader = new FileReader();
+  reader.onload = () => {
+    state.signImage = reader.result;   // data URL (recordada toda la sesión)
+    setState({ tool: 'sign' });
+    toast('Dibuja el recuadro donde quieres colocar la firma');
+  };
+  reader.onerror = () => toast('No se pudo leer la imagen');
+  reader.readAsDataURL(file);
+}
+
+// Paso final: con el rectángulo dibujado, insertar la firma en el PDF.
+async function commitSignature() {
+  if (!state.signImage) { toast('Primero importa una imagen de firma'); return; }
+  const a = toPdfPoint({ x: draw.x0, y: draw.y0 });
+  const b = toPdfPoint({ x: draw.x1, y: draw.y1 });
+  const rect = [Math.min(a.x, b.x), Math.min(a.y, b.y), Math.max(a.x, b.x), Math.max(a.y, b.y)];
+  try {
+    const info = await api.post('/api/sign', {
+      page: state.activePage - 1,
+      rect,
+      image: state.signImage,
+      keepRatio: true,
+      opacity: parseFloat($('#slider-opacity').value) / 100,
+    });
+    await applyDoc(info);
+    toast('Firma añadida');
+  } catch (err) {
+    toast('Error al firmar: ' + err.message);
+  }
+}
+
 function initDrawing() {
   const overlay = $('#annot-overlay');
   const input = $('#annot-text-input');
@@ -907,6 +1173,12 @@ function initDrawing() {
     draw.x1 = p.x; draw.y1 = p.y;
     ghostHide();
     const tiny = Math.abs(draw.x1 - draw.x0) < 4 && Math.abs(draw.y1 - draw.y0) < 4;
+    if (state.tool === 'sign') {
+      // Un simple clic coloca la firma con un tamaño por defecto (200×80 px).
+      if (tiny) { draw.x1 = draw.x0 + 200; draw.y1 = draw.y0 + 80; }
+      await commitSignature();
+      return;
+    }
     if (tiny && state.tool !== 'textbox') return;
     if (state.tool === 'textbox') {
       if (tiny) { draw.x1 = draw.x0 + 170; draw.y1 = draw.y0 + 22; }
@@ -938,7 +1210,7 @@ function initDrawing() {
 /* ===== Capa de texto seleccionable + resaltado de texto (estilo Adobe) ===== */
 let textLayerHasText = false;
 
-async function loadTextLayer(index) {
+async function loadTextLayer(index, key) {
   const tl = $('#text-layer');
   tl.innerHTML = '';
   textLayerHasText = false;
@@ -947,8 +1219,8 @@ async function loadTextLayer(index) {
   try {
     data = await api.get(`/api/words/${index}`);
   } catch { return; }
-  // La respuesta puede llegar tarde: ignorar si ya cambiamos de página.
-  if (loadedTextKey !== `${index}|${state.doc && state.doc.rev}`) return;
+  // La respuesta puede llegar tarde: ignorar si ya cambiamos de página/pestaña.
+  if (loadedTextKey !== key) return;
   buildTextLayer(tl, data);
 }
 
@@ -1154,6 +1426,78 @@ async function exportDocument() {
   }
 }
 
+/* ===== Fusionar PDFs ===== */
+function closeMergeChoice() {
+  $('#modal-merge-choice').classList.remove('is-open');
+}
+
+async function runMerge(mode) {
+  closeMergeChoice();
+  if (!inDoc()) { toast('Abre un PDF para fusionar'); return; }
+  try {
+    const r = await api.post('/api/merge', { mode });
+    if (r.cancelled) return;
+    await applyDoc(r, { resetPage: mode === 'new' });
+    if (mode === 'new') {
+      toast(`Documento nuevo con ${r.count} página${r.count === 1 ? '' : 's'} — usa Guardar para conservarlo`);
+    } else {
+      toast(`${r.added} página${r.added === 1 ? '' : 's'} añadida${r.added === 1 ? '' : 's'} al documento`);
+    }
+  } catch (e) { toast('Error al fusionar: ' + e.message); }
+}
+
+/* ===== Arrastre de la barra de título ===== */
+// Franja superior (en px de pantalla) dentro de la cual soltar maximiza.
+const SNAP_TOP_ZONE = 8;
+
+function initTitlebarDrag() {
+  const bar = $('#titlebar-drag');
+  if (!bar) return;
+  const bridge = () => window.pywebview && window.pywebview.api;
+
+  // Doble clic en la barra: maximizar / restaurar.
+  bar.addEventListener('dblclick', () => {
+    const api = bridge();
+    if (api && api.toggle_maximize) api.toggle_maximize();
+  });
+
+  bar.addEventListener('mousedown', e => {
+    if (e.button !== 0) return;             // solo botón izquierdo
+    const api = bridge();
+    if (!api || !api.drag_start) return;    // sin app de escritorio, no hacemos nada
+    e.preventDefault();
+
+    let dragging = true;
+    let pending = null;   // último evento por procesar (coalescido con rAF)
+    let scheduled = false;
+    api.drag_start(e.screenX, e.screenY);
+
+    const flush = () => {
+      scheduled = false;
+      if (!dragging || !pending || !api.drag_move) return;
+      const { sx, sy } = pending;
+      pending = null;
+      // El origen de la pantalla suele ser 0; screenY <= zona => borde superior.
+      const snapTop = sy <= (window.screen.availTop || 0) + SNAP_TOP_ZONE;
+      api.drag_move(sx, sy, snapTop);
+    };
+
+    const onMove = ev => {
+      if (!dragging) return;
+      pending = { sx: ev.screenX, sy: ev.screenY };
+      if (!scheduled) { scheduled = true; requestAnimationFrame(flush); }
+    };
+    const onUp = () => {
+      dragging = false;
+      if (api.drag_end) api.drag_end();
+      window.removeEventListener('mousemove', onMove, true);
+      window.removeEventListener('mouseup', onUp, true);
+    };
+    window.addEventListener('mousemove', onMove, true);
+    window.addEventListener('mouseup', onUp, true);
+  });
+}
+
 /* ===== Eventos ===== */
 function init() {
   // Controles de ventana
@@ -1162,16 +1506,71 @@ function init() {
   $('#win-maximize').addEventListener('click', () => winAction('maximize'));
   $('#win-close').addEventListener('click', requestClose);
 
-  // Confirmación de cierre con cambios sin guardar
-  $('#confirm-cancel').addEventListener('click', () => { $('#modal-close-confirm').classList.remove('is-open'); });
-  $('#confirm-discard').addEventListener('click', () => winAction('close'));
-  $('#confirm-save').addEventListener('click', async () => {
+  // Arrastre de la barra de título con «snap» al maximizar en el borde superior.
+  initTitlebarDrag();
+
+  // Confirmación de cierre con cambios sin guardar (pestaña o ventana completa).
+  const closeModal = () => { $('#modal-close-confirm').classList.remove('is-open'); pendingClose = null; };
+  $('#confirm-cancel').addEventListener('click', closeModal);
+
+  $('#confirm-discard').addEventListener('click', async () => {
+    const pc = pendingClose;
     $('#modal-close-confirm').classList.remove('is-open');
-    const ok = await saveDoc(false);
-    if (ok) winAction('close');
+    pendingClose = null;
+    if (pc && pc.kind === 'tab') {
+      await discardAndCloseTab(pc.id);
+    } else {
+      winAction('close');   // ventana: descartar todo y cerrar
+    }
+  });
+
+  $('#confirm-save').addEventListener('click', async () => {
+    const pc = pendingClose;
+    $('#modal-close-confirm').classList.remove('is-open');
+    pendingClose = null;
+    if (pc && pc.kind === 'tab') {
+      // Guardar esa pestaña y, si se guarda, cerrarla.
+      if (state.activeTabId !== pc.id) await activateTab(pc.id);
+      const ok = await saveDoc(false);
+      if (ok) await discardAndCloseTab(pc.id);
+    } else {
+      // Ventana: guardar TODAS las pestañas con cambios, luego cerrar.
+      const dirty = state.tabs.filter(t => t.doc && t.doc.dirty);
+      for (const t of dirty) {
+        await activateTab(t.id);
+        const ok = await saveDoc(false);
+        if (!ok) return;   // canceló un "Guardar como": abortar el cierre
+      }
+      winAction('close');
+    }
   });
   // Lo invoca el backend cuando el cierre viene del SO (Alt+F4) con cambios pendientes
   window.__requestClose = requestClose;
+
+  // Lo invoca el backend cuando OTRA instancia envía un PDF (doble-clic con la
+  // app ya abierta): añade esas pestañas y activa la primera.
+  window.__openExternal = async (ids) => {
+    try {
+      const all = ((await api.get('/api/docs')).docs) || [];
+      const nuevos = all.filter(d => ids.includes(d.docId));
+      if (!nuevos.length) return;
+      for (const info of nuevos) upsertTab(info, { resetPage: true });
+      await activateTab(nuevos[0].docId);
+      await enterReadingMode();
+      toast(nuevos.length === 1
+        ? `«${nuevos[0].name}» abierto en una pestaña nueva`
+        : `${nuevos.length} documentos abiertos en pestañas`);
+    } catch (e) {
+      toast('No se pudo abrir el archivo recibido: ' + e.message);
+    }
+  };
+
+  // Nueva pestaña (botón «+» de la tira) — abre el diálogo, igual que «Abrir PDF».
+  $('#btn-new-tab').addEventListener('click', openPdf);
+
+  // Mostrar/ocultar paneles laterales.
+  $('#btn-toggle-left').addEventListener('click', () => setState({ leftHidden: !state.leftHidden }));
+  $('#btn-toggle-right').addEventListener('click', () => setState({ rightHidden: !state.rightHidden }));
 
   // Toolbar
   $('#btn-open').addEventListener('click', openPdf);
@@ -1199,15 +1598,13 @@ function init() {
   });
   $('#btn-undo').addEventListener('click', undoAction);
   $('#btn-redo').addEventListener('click', redoAction);
-  $('#btn-merge').addEventListener('click', async () => {
+  $('#btn-merge').addEventListener('click', () => {
     if (!inDoc()) { toast('Abre un PDF para fusionar'); return; }
-    try {
-      const r = await api.post('/api/merge', {});
-      if (r.cancelled) return;
-      await applyDoc(r);
-      toast(`${r.added} página${r.added === 1 ? '' : 's'} añadida${r.added === 1 ? '' : 's'} al documento`);
-    } catch (e) { toast('Error al fusionar: ' + e.message); }
+    $('#modal-merge-choice').classList.add('is-open');
   });
+  $('#merge-cancel').addEventListener('click', closeMergeChoice);
+  $('#merge-current').addEventListener('click', () => runMerge('current'));
+  $('#merge-new').addEventListener('click', () => runMerge('new'));
   $('#btn-ocr-modal').addEventListener('click', () => setState({ modal: 'ocr', ctx: null }));
   $('#btn-export-modal').addEventListener('click', () => setState({ modal: 'export', ctx: null }));
 
@@ -1280,8 +1677,16 @@ function init() {
 
   // Herramientas (tira flotante + pestaña Anotaciones)
   $$('.tool-btn, .an-tool').forEach(b => {
-    b.addEventListener('click', e => { e.stopPropagation(); setState({ tool: b.dataset.tool }); });
+    b.addEventListener('click', e => {
+      e.stopPropagation();
+      if (b.dataset.tool === 'sign') { startSignature(); return; }
+      setState({ tool: b.dataset.tool });
+    });
   });
+  // Importar la firma PNG y, tras cargarla, entrar en modo «colocar firma».
+  $('#sign-file').addEventListener('change', onSignFileChosen);
+  // Botón para reemplazar la firma recordada por otra imagen.
+  $('#tool-sign-change').addEventListener('click', e => { e.stopPropagation(); importSignature(); });
   $$('.an-color').forEach(s => {
     s.addEventListener('click', () => setState({ annotColor: s.dataset.color }));
   });
@@ -1422,9 +1827,16 @@ function init() {
   initTextSelection();
   render();
 
-  // ¿Hay ya un documento abierto (argumento de línea de comandos)?
-  api.get('/api/doc')
-    .then(info => { if (info.open) return applyDoc(info, { resetPage: true }); })
+  // ¿Hay ya documentos abiertos (p. ej. argumento de línea de comandos)?
+  // Reconstruye una pestaña por cada uno y activa la primera.
+  api.get('/api/docs')
+    .then(async r => {
+      const docs = (r && r.docs) || [];
+      if (!docs.length) return;
+      for (const info of docs) upsertTab(info, { resetPage: true });
+      await activateTab(docs[0].docId);
+      await enterReadingMode();
+    })
     .catch(() => {});
 }
 

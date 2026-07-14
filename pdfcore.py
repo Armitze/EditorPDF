@@ -1,4 +1,5 @@
 """Núcleo de manipulación de PDFs con PyMuPDF (fitz)."""
+import io
 import os
 import shutil
 import tempfile
@@ -15,6 +16,17 @@ _INVALID_FILENAME = '<>:"/\\|?*'
 def _hex_to_rgb(color):
     color = (color or '#f2d024').lstrip('#')
     return tuple(int(color[i:i + 2], 16) / 255 for i in (0, 2, 4))
+
+
+def _apply_opacity(png_bytes, opacity):
+    """Devuelve el PNG con su canal alfa escalado por `opacity` (0..1)."""
+    from PIL import Image
+    img = Image.open(io.BytesIO(png_bytes)).convert('RGBA')
+    alpha = img.getchannel('A').point(lambda a: int(a * opacity))
+    img.putalpha(alpha)
+    out = io.BytesIO()
+    img.save(out, format='PNG')
+    return out.getvalue()
 
 
 class PdfState:
@@ -186,6 +198,34 @@ class PdfState:
             self.rev += 1
             return self.info()
 
+    def add_signature(self, index, rect, png_bytes, keep_ratio=True, opacity=1.0):
+        """Inserta una imagen (firma PNG) dentro de `rect` en la página `index`.
+
+        rect: [x0, y0, x1, y1] en puntos PDF. png_bytes: bytes de la imagen.
+        keep_ratio: conserva la proporción de la imagen dentro del recuadro.
+        opacity: 0..1; si es < 1 se aplica al canal alfa de la firma.
+        """
+        if not png_bytes:
+            raise ValueError('No se recibió ninguna imagen de firma.')
+        opacity = max(0.05, min(1.0, opacity))
+        with self._lock:
+            self._require()
+            self._snapshot()
+            page = self.doc[index]
+            r = fitz.Rect(rect)
+            if r.width < 4 or r.height < 4:
+                raise ValueError('El área de la firma es demasiado pequeña.')
+            stream = png_bytes
+            if opacity < 0.999:
+                stream = _apply_opacity(png_bytes, opacity)
+            # keep_proportion respeta el aspecto de la firma; overlay la pone
+            # encima del contenido; el fondo transparente del PNG se conserva.
+            page.insert_image(r, stream=stream,
+                              keep_proportion=keep_ratio, overlay=True)
+            self.dirty = True
+            self.rev += 1
+            return self.info()
+
     def annot_count(self, index):
         with self._lock:
             page = self._require()[index]
@@ -296,16 +336,50 @@ class PdfState:
                 saved.append(path)
             return saved
 
-    def merge(self, other_path):
+    def merge(self, other_paths):
+        """Añade uno o varios PDFs (en orden) al documento actual."""
+        paths = [other_paths] if isinstance(other_paths, str) else list(other_paths)
         with self._lock:
             doc = self._require()
             self._snapshot()
-            other = fitz.open(other_path)
-            added = other.page_count
-            doc.insert_pdf(other)
-            other.close()
+            added = 0
+            for p in paths:
+                other = fitz.open(p)
+                added += other.page_count
+                doc.insert_pdf(other)
+                other.close()
             self.dirty = True
             self.rev += 1
+            info = self.info()
+            info['added'] = added
+            return info
+
+    def merge_new(self, other_paths):
+        """Combina el documento actual y uno o varios PDFs en un documento NUEVO.
+
+        El documento actual queda reemplazado en memoria por el resultado, sin
+        modificar en disco ninguno de los originales. El nuevo documento no tiene
+        ruta (Guardar pedirá ubicación) y arranca marcado como modificado. Los PDFs
+        se añaden en el orden recibido, después de las páginas del documento actual.
+        """
+        paths = [other_paths] if isinstance(other_paths, str) else list(other_paths)
+        with self._lock:
+            current = self._require()
+            combined = fitz.open()               # documento vacío nuevo
+            combined.insert_pdf(current)         # páginas del actual
+            added = 0
+            for p in paths:
+                other = fitz.open(p)
+                added += other.page_count
+                combined.insert_pdf(other)       # + páginas de cada PDF
+                other.close()
+            current.close()
+            self.doc = combined
+            self.path = None                     # sin ruta: Guardar como…
+            self.dirty = True
+            self.rev += 1
+            self._undo.clear()
+            self._redo.clear()
             info = self.info()
             info['added'] = added
             return info
@@ -348,3 +422,90 @@ class PdfState:
                 elif part:
                     pages.add(int(part) - 1)
             return sorted(p for p in pages if 0 <= p < count)
+
+
+class DocumentManager:
+    """Gestiona varios documentos abiertos a la vez (una pestaña por documento).
+
+    Cada documento es un PdfState independiente identificado por un id entero
+    monótono (como cadena: "1", "2", …). Los ids no se reutilizan: así una
+    respuesta tardía nunca escribe en la pestaña equivocada. La lógica PDF vive
+    íntegra en PdfState; aquí solo se orquesta el conjunto.
+    """
+
+    def __init__(self):
+        self._lock = threading.RLock()
+        self._docs = {}      # docId -> PdfState
+        self._order = []     # docIds en orden de apertura (para list())
+        self._next_id = 1
+
+    def _new_id(self):
+        with self._lock:
+            doc_id = str(self._next_id)
+            self._next_id += 1
+            return doc_id
+
+    def open(self, path):
+        """Abre un PDF en un documento NUEVO y devuelve su info (con docId)."""
+        state = PdfState()
+        info = state.open(path)          # puede lanzar (protegido, etc.)
+        doc_id = self._new_id()
+        with self._lock:
+            self._docs[doc_id] = state
+            self._order.append(doc_id)
+        info['docId'] = doc_id
+        return info
+
+    def new_empty(self):
+        """Crea un documento vacío (sin abrir archivo) y devuelve (docId, state)."""
+        state = PdfState()
+        doc_id = self._new_id()
+        with self._lock:
+            self._docs[doc_id] = state
+            self._order.append(doc_id)
+        return doc_id, state
+
+    def get(self, doc_id):
+        with self._lock:
+            return self._docs.get(doc_id)
+
+    def info(self, doc_id):
+        state = self.get(doc_id)
+        if not state:
+            return None
+        info = state.info()
+        info['docId'] = doc_id
+        return info
+
+    def close(self, doc_id):
+        with self._lock:
+            state = self._docs.pop(doc_id, None)
+            if doc_id in self._order:
+                self._order.remove(doc_id)
+        if state:
+            state.close()
+        return state is not None
+
+    def list(self):
+        """Info de todas las pestañas, en orden de apertura."""
+        with self._lock:
+            ids = list(self._order)
+        out = []
+        for doc_id in ids:
+            info = self.info(doc_id)
+            if info:
+                out.append(info)
+        return out
+
+    def any_dirty(self):
+        with self._lock:
+            states = list(self._docs.values())
+        return any(s.info().get('dirty') for s in states)
+
+    def close_all(self):
+        with self._lock:
+            states = list(self._docs.values())
+            self._docs.clear()
+            self._order.clear()
+        for s in states:
+            s.close()
