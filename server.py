@@ -91,6 +91,7 @@ class AnnotBody(BaseModel):
     p1: list[float] | None = None
     p2: list[float] | None = None
     text: str = ''
+    quads: list[list[float]] | None = None
 
 
 class PagesBody(BaseModel):
@@ -185,11 +186,19 @@ def create_app(pdf: PdfState, windows: WindowService) -> FastAPI:
         except Exception as e:
             raise HTTPException(400, str(e))
 
+    @app.get('/api/words/{index}')
+    def words(index: int):
+        try:
+            return pdf.words(index)
+        except Exception as e:
+            raise HTTPException(400, str(e))
+
     @app.post('/api/annot')
     def add_annot(body: AnnotBody):
         try:
             return pdf.add_annot(body.page, body.kind, body.color, body.width,
-                                 body.opacity, body.rect, body.p1, body.p2, body.text)
+                                 body.opacity, body.rect, body.p1, body.p2, body.text,
+                                 body.quads)
         except Exception as e:
             raise HTTPException(400, str(e))
 

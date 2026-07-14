@@ -103,6 +103,7 @@
             <!-- Documento real (PDF abierto) -->
             <div class="doc-page real-page" id="real-doc" hidden>
               <img id="page-image" alt="Página del documento" draggable="false">
+              <div id="text-layer"></div>
               <div id="annot-overlay">
                 <div id="draw-ghost-rect" hidden></div>
                 <svg id="draw-ghost-line" hidden><line x1="0" y1="0" x2="0" y2="0"/></svg>
@@ -533,6 +534,30 @@ Total: $56,724.00</textarea>
   </div>
 
   <div class="toast" id="toast"></div>
+
+  <!-- ===== MINI-MENÚ DE SELECCIÓN DE TEXTO (estilo Adobe) ===== -->
+  <div class="sel-popup" id="sel-popup" hidden>
+    <button class="sel-act" data-selact="highlight" title="Resaltar">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h5"/><path d="M14.5 4.5l5 5-8.5 8.5-5 1 1-5 7.5-9.5Z"/></svg>Resaltar
+    </button>
+    <button class="sel-act" data-selact="underline" title="Subrayar">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4v7a6 6 0 0 0 12 0V4"/><path d="M5 20h14"/></svg>Subrayar
+    </button>
+    <button class="sel-act" data-selact="strikeout" title="Tachar">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M8 7.5A4 4 0 0 1 16 8M9 16a4 4 0 0 0 7-1.5"/></svg>Tachar
+    </button>
+    <span class="sel-popup-sep"></span>
+    <button class="sel-act" data-selact="copy" title="Copiar (Ctrl+C)">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M6 15H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v1"/></svg>Copiar
+    </button>
+    <span class="sel-popup-sep"></span>
+    <span class="sel-popup-colors">
+      <span class="sel-color" data-color="#f2d024" style="background:#f2d024" title="Resaltar en amarillo"></span>
+      <span class="sel-color" data-color="#5bc47f" style="background:#5bc47f" title="Resaltar en verde"></span>
+      <span class="sel-color" data-color="#5aa9f0" style="background:#5aa9f0" title="Resaltar en azul"></span>
+      <span class="sel-color" data-color="#f08a8a" style="background:#f08a8a" title="Resaltar en rosa"></span>
+    </span>
+  </div>
 
 </div>
 <script src="app.js"></script>

@@ -127,16 +127,41 @@ class PdfState:
             rect = self._require()[index].rect
             return {'width': rect.width, 'height': rect.height}
 
+    def words(self, index):
+        """Palabras de la página con su recuadro (para la capa de texto seleccionable).
+
+        Devuelve coordenadas en puntos PDF, mismo sistema (origen arriba-izq.) que
+        el render de la página. Lista vacía = página escaneada / sin texto digital.
+        """
+        with self._lock:
+            page = self._require()[index]
+            rect = page.rect
+            words = [[w[0], w[1], w[2], w[3], w[4]] for w in page.get_text('words')]
+            return {'width': rect.width, 'height': rect.height, 'words': words}
+
     # ---------- anotaciones ----------
     def add_annot(self, index, kind, color='#f2d024', width=3, opacity=0.8,
-                  rect=None, p1=None, p2=None, text=''):
+                  rect=None, p1=None, p2=None, text='', quads=None):
         with self._lock:
             self._require()
             self._snapshot()
             page = self.doc[index]
             rgb = _hex_to_rgb(color)
-            if kind == 'highlight':
-                annot = page.add_highlight_annot(fitz.Rect(rect))
+            # Anotaciones sobre texto seleccionado: reciben `quads` (una lista de
+            # recuadros, uno por renglón de la selección) en puntos PDF.
+            if kind in ('highlight', 'underline', 'strikeout'):
+                if quads:
+                    ql = [fitz.Rect(q).quad for q in quads]
+                elif rect:
+                    ql = [fitz.Rect(rect).quad]  # compatibilidad: resaltar un rectángulo
+                else:
+                    raise ValueError('Faltan las coordenadas de la selección.')
+                if kind == 'highlight':
+                    annot = page.add_highlight_annot(quads=ql)
+                elif kind == 'underline':
+                    annot = page.add_underline_annot(quads=ql)
+                else:
+                    annot = page.add_strikeout_annot(quads=ql)
                 annot.set_colors(stroke=rgb)
             elif kind in ('line', 'arrow'):
                 annot = page.add_line_annot(fitz.Point(p1), fitz.Point(p2))

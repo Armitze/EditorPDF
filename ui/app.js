@@ -213,6 +213,7 @@ function renderPages() {
 
 let pageQualityTimer = null;
 let loadedPageKey = '';
+let loadedTextKey = '';
 
 function renderDoc() {
   const real = inDoc();
@@ -241,6 +242,14 @@ function renderDoc() {
     const drawing = state.tool !== 'select';
     overlay.style.pointerEvents = drawing ? 'auto' : 'none';
     overlay.classList.toggle('is-drawing', drawing);
+    // Capa de texto seleccionable: se reconstruye al cambiar de página/revisión.
+    const tl = $('#text-layer');
+    tl.classList.toggle('is-select', !drawing);
+    if (drawing) hideSelPopup();
+    if (loadedTextKey !== key) {
+      loadedTextKey = key;
+      loadTextLayer(state.activePage - 1);
+    }
     return;
   }
   ['invnum', 'invdate', 'client', 'total'].forEach(id => {
@@ -926,6 +935,158 @@ function initDrawing() {
   input.addEventListener('blur', () => { input.hidden = true; });
 }
 
+/* ===== Capa de texto seleccionable + resaltado de texto (estilo Adobe) ===== */
+let textLayerHasText = false;
+
+async function loadTextLayer(index) {
+  const tl = $('#text-layer');
+  tl.innerHTML = '';
+  textLayerHasText = false;
+  hideSelPopup();
+  let data;
+  try {
+    data = await api.get(`/api/words/${index}`);
+  } catch { return; }
+  // La respuesta puede llegar tarde: ignorar si ya cambiamos de página.
+  if (loadedTextKey !== `${index}|${state.doc && state.doc.rev}`) return;
+  buildTextLayer(tl, data);
+}
+
+function buildTextLayer(tl, data) {
+  const f = PAGE_DISPLAY_WIDTH / (data.width || PAGE_DISPLAY_WIDTH);
+  const frag = document.createDocumentFragment();
+  const spans = [];
+  for (const w of data.words) {
+    const [x0, y0, x1, y1, text] = w;
+    if (!text) continue;
+    const span = document.createElement('span');
+    span.textContent = text;
+    const h = (y1 - y0) * f;
+    span.style.left = (x0 * f) + 'px';
+    span.style.top = (y0 * f) + 'px';
+    span.style.height = h + 'px';
+    span.style.fontSize = (h * 0.92) + 'px';
+    span.dataset.w = (x1 - x0) * f;   // ancho objetivo en px de pantalla
+    frag.appendChild(span);
+    spans.push(span);
+  }
+  tl.appendChild(frag);
+  // Escalar cada palabra horizontalmente para que cubra su recuadro real.
+  for (const span of spans) {
+    const natural = span.offsetWidth;
+    if (natural > 0) {
+      span.style.transform = `scaleX(${Number(span.dataset.w) / natural})`;
+    }
+  }
+  textLayerHasText = spans.length > 0;
+}
+
+// Recuadros de la selección actual convertidos a puntos PDF (uno por renglón).
+function selectionQuads() {
+  const sel = window.getSelection();
+  if (!sel || sel.isCollapsed || sel.rangeCount === 0) return null;
+  const tl = $('#text-layer');
+  if (!tl.contains(sel.anchorNode) || !tl.contains(sel.focusNode)) return null;
+  const tlRect = tl.getBoundingClientRect();
+  if (!tlRect.width) return null;
+  const pw = state.pageSize ? state.pageSize.width : PAGE_DISPLAY_WIDTH;
+  const factor = pw / tlRect.width;   // px de pantalla (ya escalados) → puntos PDF
+  const quads = [];
+  for (const r of sel.getRangeAt(0).getClientRects()) {
+    if (r.width < 1 || r.height < 1) continue;
+    quads.push([
+      (r.left - tlRect.left) * factor,
+      (r.top - tlRect.top) * factor,
+      (r.right - tlRect.left) * factor,
+      (r.bottom - tlRect.top) * factor,
+    ]);
+  }
+  return quads.length ? quads : null;
+}
+
+function hideSelPopup() {
+  const p = $('#sel-popup');
+  if (p && !p.hidden) p.hidden = true;
+}
+
+function showSelPopup() {
+  if (!inDoc() || state.tool !== 'select') return;
+  const sel = window.getSelection();
+  if (!sel || sel.isCollapsed || sel.rangeCount === 0) { hideSelPopup(); return; }
+  const tl = $('#text-layer');
+  if (!tl.contains(sel.anchorNode)) { hideSelPopup(); return; }
+  const rect = sel.getRangeAt(0).getBoundingClientRect();
+  if (!rect.width) { hideSelPopup(); return; }
+  const popup = $('#sel-popup');
+  popup.hidden = false;
+  // Centrado sobre la selección, sin salirse de la ventana.
+  const pw = popup.offsetWidth, ph = popup.offsetHeight;
+  let left = rect.left + rect.width / 2 - pw / 2;
+  left = Math.max(8, Math.min(left, window.innerWidth - pw - 8));
+  let top = rect.top - ph - 9;
+  if (top < 8) top = rect.bottom + 9;       // si no cabe arriba, va debajo
+  popup.style.left = Math.round(left) + 'px';
+  popup.style.top = Math.round(top) + 'px';
+  const arrow = rect.left + rect.width / 2 - left;
+  popup.style.setProperty('--arrow', Math.max(12, Math.min(pw - 12, arrow)) + 'px');
+}
+
+async function applyTextAnnot(kind, color) {
+  const quads = selectionQuads();
+  if (!quads) { toast('Selecciona texto del documento primero'); return; }
+  try {
+    const info = await api.post('/api/annot', {
+      page: state.activePage - 1,
+      kind,
+      color: color || state.annotColor,
+      opacity: parseFloat($('#slider-opacity').value) / 100,
+      quads,
+    });
+    window.getSelection().removeAllRanges();
+    hideSelPopup();
+    await applyDoc(info);
+    toast(kind === 'underline' ? 'Texto subrayado'
+      : kind === 'strikeout' ? 'Texto tachado' : 'Texto resaltado');
+  } catch (e) {
+    toast('No se pudo anotar: ' + e.message);
+  }
+}
+
+function copySelection() {
+  const text = String(window.getSelection());
+  if (!text) return;
+  navigator.clipboard.writeText(text)
+    .then(() => toast('Texto copiado al portapapeles'))
+    .catch(() => toast('No se pudo copiar'));
+  hideSelPopup();
+}
+
+function initTextSelection() {
+  const tl = $('#text-layer');
+  const popup = $('#sel-popup');
+  // Mostrar el menú al terminar de arrastrar una selección.
+  tl.addEventListener('mouseup', () => setTimeout(showSelPopup, 0));
+  // Ocultarlo cuando la selección desaparece.
+  document.addEventListener('selectionchange', () => {
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed) hideSelPopup();
+  });
+  // No perder la selección al pulsar los botones del menú.
+  popup.addEventListener('mousedown', e => e.preventDefault());
+  popup.querySelectorAll('.sel-act').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const act = btn.dataset.selact;
+      if (act === 'copy') copySelection();
+      else applyTextAnnot(act);
+    });
+  });
+  popup.querySelectorAll('.sel-color').forEach(sw => {
+    sw.addEventListener('click', () => applyTextAnnot('highlight', sw.dataset.color));
+  });
+  // Reposicionar/ocultar al desplazar el lienzo.
+  $('#canvas-scroll').addEventListener('scroll', hideSelPopup);
+}
+
 /* ===== Utilidades ===== */
 let toastTimer = null;
 function toast(msg) {
@@ -1258,6 +1419,7 @@ function init() {
   });
 
   initDrawing();
+  initTextSelection();
   render();
 
   // ¿Hay ya un documento abierto (argumento de línea de comandos)?
