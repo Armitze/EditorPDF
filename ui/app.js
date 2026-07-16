@@ -300,6 +300,58 @@ async function changePage(n) {
   render();
 }
 
+const wait = ms => new Promise(r => setTimeout(r, ms));
+
+// Espera a que la imagen de la página nueva esté pintada. Sin esto, el alto
+// del lienzo aún es el de la página anterior y colocar el scroll produce un
+// segundo salto cuando la imagen carga.
+function pageImageReady() {
+  const img = $('#page-image');
+  if (img.complete && img.naturalWidth) return Promise.resolve();
+  return new Promise(res => {
+    const done = () => {
+      img.removeEventListener('load', done);
+      img.removeEventListener('error', done);
+      res();
+    };
+    img.addEventListener('load', done);
+    img.addEventListener('error', done);
+    setTimeout(done, 800); // red lenta: no bloquear el pase de página
+  });
+}
+
+// Pase de página con transición: la actual se desvanece hacia el lado del
+// avance, se recoloca el scroll con la página ya cargada, y la nueva entra
+// desde el lado contrario. dir: +1 siguiente, -1 anterior.
+let turning = false;
+let pageTurnAt = 0;
+
+async function turnPage(dir) {
+  if (turning) return;
+  const sc = $('#canvas-scroll');
+  const page = $('#real-doc');
+  const OUT = ['is-turn-out-up', 'is-turn-out-down'];
+  const IN = ['is-turn-in-up', 'is-turn-in-down'];
+  turning = true;
+  try {
+    page.classList.add(dir > 0 ? OUT[0] : OUT[1]);
+    await wait(130);
+    await changePage(state.activePage + dir);
+    await pageImageReady();
+    renderZoom();
+    sc.scrollTop = dir > 0 ? 0 : sc.scrollHeight;
+    page.classList.remove(...OUT);
+    page.classList.add(dir > 0 ? IN[0] : IN[1]);
+    void page.offsetWidth; // fuerza reflow para que la transición de entrada arranque
+    page.classList.remove(...IN);
+    await wait(180);
+  } finally {
+    page.classList.remove(...OUT, ...IN);
+    turning = false;
+    pageTurnAt = Date.now(); // la inercia posterior no debe encadenar otro pase
+  }
+}
+
 /* ===== Render ===== */
 function render() {
   renderTitlebar();
@@ -1720,24 +1772,18 @@ function init() {
   $('#page-image').addEventListener('load', renderZoom);
 
   // Rueda sin Ctrl en el borde del documento: pasar de página
-  let pageTurnAt = 0;
   $('#canvas-scroll').addEventListener('wheel', e => {
     if (e.ctrlKey) return;
     const sc = $('#canvas-scroll');
     const atBottom = sc.scrollTop + sc.clientHeight >= sc.scrollHeight - 2;
     const atTop = sc.scrollTop <= 2;
-    const now = Date.now();
-    if (e.deltaY > 0 && atBottom && state.activePage < pageCount()) {
-      e.preventDefault();
-      if (now - pageTurnAt < 450) return; // amortigua la inercia del scroll
-      pageTurnAt = now;
-      changePage(state.activePage + 1).then(() => { sc.scrollTop = 0; });
-    } else if (e.deltaY < 0 && atTop && state.activePage > 1) {
-      e.preventDefault();
-      if (now - pageTurnAt < 450) return;
-      pageTurnAt = now;
-      changePage(state.activePage - 1).then(() => { sc.scrollTop = sc.scrollHeight; });
-    }
+    const next = e.deltaY > 0 && atBottom && state.activePage < pageCount();
+    const prev = e.deltaY < 0 && atTop && state.activePage > 1;
+    if (!next && !prev) return;
+    e.preventDefault();
+    if (turning || Date.now() - pageTurnAt < 350) return; // amortigua la inercia del scroll
+    pageTurnAt = Date.now();
+    turnPage(next ? 1 : -1);
   }, { passive: false });
 
   // Pestañas del panel derecho

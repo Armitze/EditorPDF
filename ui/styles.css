@@ -96,6 +96,17 @@ a{color:#2563a8}a:hover{color:#1d5290}
 .page-scale{width:768px;transform:scale(1);transform-origin:top left}
 .doc-page{position:relative;width:768px;min-height:1000px;background:#fff;box-shadow:0 6px 28px rgba(20,28,40,.18);padding:58px 58px 46px;font-size:14px;line-height:1.55;color:#2b303a}
 
+/* Pase de página: la actual sale hacia el lado del avance, la nueva entra
+   desde el contrario. Sin clase = estado de reposo (opacidad 1, sin offset). */
+.real-page{transition:opacity .15s ease,transform .18s cubic-bezier(.22,.61,.36,1)}
+.real-page.is-turn-out-up{opacity:0;transform:translateY(-22px)}
+.real-page.is-turn-out-down{opacity:0;transform:translateY(22px)}
+.real-page.is-turn-in-up{opacity:0;transform:translateY(22px)}
+.real-page.is-turn-in-down{opacity:0;transform:translateY(-22px)}
+@media (prefers-reduced-motion:reduce){
+  .real-page{transition:none}
+}
+
 .doc-header{display:flex;justify-content:space-between;align-items:flex-start}
 .doc-logo-wrap{position:relative;display:inline-block;transition:transform .28s ease}
 .doc-logo-wrap.is-moved{transform:translate(16px,10px)}
