@@ -14,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from pdfcore import DocumentManager, PasswordRequired, PdfState
+from updater import UpdateManager
 
 
 def base_dir():
@@ -338,6 +339,10 @@ def _tables_html(tables):
 
 def create_app(manager: DocumentManager, windows: WindowService) -> FastAPI:
     app = FastAPI(title='PDF Editor Pro')
+    updates = UpdateManager()
+    # Comprobar si hay versión nueva nada más arrancar (en segundo plano: no
+    # retrasa el inicio ni molesta si no hay conexión).
+    updates.check_async()
 
     def get_doc(docId: str) -> PdfState:
         """Dependencia: resuelve el PdfState de la pestaña indicada por docId."""
@@ -759,6 +764,52 @@ def create_app(manager: DocumentManager, windows: WindowService) -> FastAPI:
     @app.post('/api/window')
     def window_control(body: WindowBody):
         return {'ok': windows.control(body.action)}
+
+    # ---------- actualización automática ----------
+    @app.get('/api/update/status')
+    def update_status():
+        """Estado del updater: versión actual, si hay una nueva, y progreso."""
+        return updates.status()
+
+    @app.post('/api/update/check')
+    def update_check():
+        """Fuerza una comprobación de versión (además de la del arranque)."""
+        updates.check_async()
+        return {'ok': True}
+
+    @app.post('/api/update/download')
+    def update_download():
+        """Empieza a descargar la versión disponible."""
+        if not updates.start_download():
+            raise HTTPException(400, 'No hay ninguna actualización lista para descargar.')
+        return {'ok': True}
+
+    @app.post('/api/update/apply')
+    def update_apply():
+        """Aplica la actualización descargada y cierra la app para reinstalarla.
+
+        El aplicador externo espera a que este proceso muera, reemplaza la
+        carpeta de instalación y vuelve a abrir la app ya actualizada.
+        """
+        def close_app():
+            windows.allow_close = True
+            if windows.window:
+                try:
+                    windows.window.destroy()
+                except Exception:
+                    os._exit(0)
+            else:
+                os._exit(0)
+
+        if not updates.apply(close_app):
+            st = updates.status()
+            raise HTTPException(400, st.get('error') or 'No se pudo aplicar la actualización.')
+        return {'ok': True}
+
+    @app.post('/api/update/cancel')
+    def update_cancel():
+        updates.cancel()
+        return {'ok': True}
 
     app.mount('/', StaticFiles(directory=os.path.join(base_dir(), 'ui'), html=True), name='ui')
     return app

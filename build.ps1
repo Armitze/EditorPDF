@@ -78,6 +78,7 @@ $required = @{
     webview     = 'pywebview'
     fitz        = 'PyMuPDF'
     PIL         = 'Pillow'
+    docx        = 'python-docx'
     PyInstaller = 'pyinstaller'
 }
 # find_spec devuelve None en vez de lanzar excepcion, asi no escribe en stderr
@@ -127,12 +128,17 @@ if ($Clean) {
 # de forma dinamica que el analisis estatico de PyInstaller no ve; sin esto el
 # .exe compila pero falla al arrancar con "No module named ..." de un submodulo.
 Step 'Compilando ejecutable con PyInstaller'
+# --collect-data docx: python-docx trae una plantilla default.docx que
+# PyInstaller no detecta (es dato, no codigo); sin ella la exportacion a Word
+# falla en el .exe. Debe coincidir con .github/workflows/release.yml.
 & $py -m PyInstaller --noconfirm --clean --onedir --windowed `
     --name PDFEditorPro --icon assets\icon.ico --add-data "ui;ui" `
     --collect-submodules fastapi `
     --collect-submodules starlette `
     --collect-submodules uvicorn `
     --collect-submodules webview `
+    --collect-data docx `
+    --hidden-import docx `
     main.py
 if ($LASTEXITCODE -ne 0) { throw 'Fallo la compilacion con PyInstaller.' }
 

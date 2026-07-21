@@ -1,0 +1,104 @@
+name: Compilar y publicar
+
+# Cada push a main compila el .exe en Windows y publica un GitHub Release.
+# La app instalada consulta ese release y se ofrece a actualizarse sola.
+on:
+  push:
+    branches: [main]
+    # Cambios que no afectan al binario no disparan una versión nueva.
+    paths-ignore:
+      - '**.md'
+      - '.gitignore'
+      - '.github/**'
+  workflow_dispatch:   # permite lanzarlo a mano desde la pestaña Actions
+
+# Necesario para que la Action pueda crear el release y subir el .zip.
+permissions:
+  contents: write
+
+concurrency:
+  # Un push nuevo cancela el build anterior en curso (no publica versiones viejas).
+  group: release
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Descargar el código
+        uses: actions/checkout@v4
+
+      - name: Preparar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Instalar dependencias
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Calcular versión (AÑO.MMDD.BUILD)
+        id: ver
+        shell: pwsh
+        run: |
+          # AÑO.MMDD a partir de la fecha UTC + número de run como build:
+          # siempre creciente, así la comparación de versiones nunca retrocede.
+          $date = (Get-Date).ToUniversalTime()
+          $version = '{0}.{1}.{2}' -f $date.Year, $date.ToString('MMdd'), $env:GITHUB_RUN_NUMBER
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "tag=v$version" >> $env:GITHUB_OUTPUT
+          Write-Host "Versión: $version"
+
+      - name: Escribir la versión en version.py
+        shell: pwsh
+        run: |
+          # El .exe publicado debe llevar exactamente la versión de este release.
+          $v = '${{ steps.ver.outputs.version }}'
+          $path = 'version.py'
+          $content = Get-Content -LiteralPath $path -Raw
+          $content = $content -replace "__version__ = '.*'", "__version__ = '$v'"
+          Set-Content -LiteralPath $path -Value $content -NoNewline -Encoding utf8
+          Write-Host "version.py actualizado a $v"
+
+      - name: Generar el icono
+        run: python make_icon.py
+
+      - name: Compilar con PyInstaller
+        run: |
+          # --collect-data docx: python-docx trae una plantilla default.docx que
+          # PyInstaller no detecta (es dato, no código); sin ella la exportación
+          # a Word falla en el .exe. --hidden-import docx por si el análisis
+          # estático no ve el import (es perezoso dentro de exportword/pdfcore).
+          python -m PyInstaller --noconfirm --clean --onedir --windowed `
+            --name PDFEditorPro --icon assets\icon.ico --add-data "ui;ui" `
+            --collect-submodules fastapi `
+            --collect-submodules starlette `
+            --collect-submodules uvicorn `
+            --collect-submodules webview `
+            --collect-data docx `
+            --hidden-import docx `
+            main.py
+        shell: pwsh
+
+      - name: Empaquetar la carpeta en un .zip
+        shell: pwsh
+        run: |
+          # Comprime la carpeta PDFEditorPro entera (mantiene la carpeta raíz
+          # dentro del zip, que es lo que espera el aplicador de actualizaciones).
+          Compress-Archive -Path dist\PDFEditorPro -DestinationPath PDFEditorPro-windows.zip -Force
+          $size = (Get-Item PDFEditorPro-windows.zip).Length
+          Write-Host "ZIP: $([math]::Round($size/1MB,1)) MB"
+
+      - name: Publicar el Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: PDF Editor Pro ${{ steps.ver.outputs.version }}
+          body: |
+            Versión ${{ steps.ver.outputs.version }} compilada automáticamente desde `main`.
+
+            La app instalada detectará esta versión y ofrecerá actualizarse sola.
+          files: PDFEditorPro-windows.zip
+          make_latest: true

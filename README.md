@@ -41,6 +41,18 @@ python -m PyInstaller --noconfirm --clean --onedir --windowed `
 
 El resultado queda en `dist/PDFEditorPro/PDFEditorPro.exe`. Se usa el modo `--onedir` (una carpeta con el `.exe` y sus dependencias sueltas) porque **arranca en pocos segundos**; el modo `--onefile` genera un único archivo pero se descomprime entero en cada inicio, lo que lo hace mucho más lento de abrir.
 
+## Actualizaciones automáticas
+
+Cada vez que se hace **push a `main`**, GitHub Actions (`.github/workflows/release.yml`) compila el `.exe` en Windows y publica un **GitHub Release** con la carpeta comprimida en `PDFEditorPro-windows.zip`. La versión se genera sola con el formato `AÑO.MMDD.BUILD` (p. ej. `2026.0721.7`) y queda escrita en `version.py`.
+
+La app instalada (`updater.py`):
+
+1. Al arrancar, consulta el último release y compara su versión con la instalada.
+2. Si hay una más nueva, muestra un aviso flotante **«Nueva versión disponible»**.
+3. Si aceptas, descarga el `.zip` (con barra de progreso), reemplaza la carpeta de instalación y **reinicia la app** ya actualizada. Si la descarga o la copia fallan, se **restaura la versión anterior** intacta.
+
+La actualización solo se activa en el `.exe` compilado; en desarrollo (`python main.py`) queda desactivada. El repositorio de origen se configura en `version.py` (`REPO`). Para publicar una versión manualmente (sin push), se puede lanzar el workflow desde la pestaña **Actions → Compilar y publicar → Run workflow**.
+
 ## Usarlo como visor de PDF predeterminado
 
 Al ejecutar `PDFEditorPro.exe` (dentro de `dist/PDFEditorPro/`) por primera vez, la app se registra en Windows (HKCU, sin permisos de administrador) como aplicación capaz de abrir `.pdf`. Después:

@@ -2589,4 +2589,123 @@ function init() {
     .catch(() => {});
 }
 
-document.addEventListener('DOMContentLoaded', init);
+/* ===== Actualización automática ===== */
+// El backend comprueba al arrancar si hay versión nueva y lleva la descarga.
+// Aquí solo se hace polling del estado y se pinta el aviso, las notas y el
+// progreso; el reemplazo y reinicio los hace un proceso externo (ver updater.py).
+const upd = {
+  poll: 0,
+  available: null,   // release nuevo, o null
+  dismissed: false,  // el usuario pulsó «Ahora no» esta sesión
+  applying: false,
+};
+
+function bytesToMB(n) {
+  return (n / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
+async function updateTick() {
+  let st;
+  try {
+    st = await api.get('/api/update/status');
+  } catch { return; }
+  // Fuera del .exe (desarrollo) no hay nada que actualizar.
+  if (!st.supported) { clearInterval(upd.poll); return; }
+  upd.available = st.available;
+
+  // Banner: solo si hay versión nueva, no se ha descartado y el modal no está abierto.
+  const banner = $('#update-banner');
+  const showBanner = !!st.available && !upd.dismissed
+    && !$('#modal-update').classList.contains('is-open');
+  banner.hidden = !showBanner;
+  if (st.available) {
+    $('#update-banner-text').textContent =
+      `Versión ${st.available.version} · ${bytesToMB(st.available.size || 0)}`;
+  }
+
+  // Si el modal está abierto, reflejar descarga / error / listo.
+  if ($('#modal-update').classList.contains('is-open')) {
+    renderUpdateModal(st);
+  }
+
+  // Cuando la descarga termina y el usuario ya dio a instalar, aplicar sola.
+  if (st.state === 'ready' && upd.applying) {
+    upd.applying = false;
+    try { await api.post('/api/update/apply'); } catch (e) {
+      $('#update-error').hidden = false;
+      $('#update-error').textContent = 'No se pudo aplicar: ' + e.message;
+    }
+  }
+}
+
+function renderUpdateModal(st) {
+  const downloading = st.state === 'downloading';
+  const wrap = $('#update-progress-wrap');
+  wrap.hidden = !(downloading || st.state === 'applying');
+  if (downloading) {
+    const pct = Math.round((st.progress || 0) * 100);
+    $('#update-progress-bar').style.width = pct + '%';
+    $('#update-progress-label').textContent = `Descargando… ${pct}%`;
+  } else if (st.state === 'applying') {
+    $('#update-progress-bar').style.width = '100%';
+    $('#update-progress-label').textContent = 'Instalando y reiniciando…';
+  }
+  const err = $('#update-error');
+  err.hidden = !st.error;
+  if (st.error) err.textContent = st.error;
+  // Botón: deshabilitado mientras trabaja.
+  const btn = $('#update-install');
+  btn.disabled = downloading || st.state === 'applying';
+  btn.textContent = downloading ? 'Descargando…'
+    : st.state === 'applying' ? 'Reiniciando…' : 'Descargar e instalar';
+}
+
+function openUpdateModal() {
+  const a = upd.available;
+  if (!a) return;
+  $('#update-banner').hidden = true;
+  $('#update-ver-cur').textContent = 'Actual';
+  $('#update-ver-new').textContent = `Versión ${a.version}`;
+  $('#update-notes').textContent = a.notes || 'Mejoras y correcciones.';
+  $('#update-progress-wrap').hidden = true;
+  $('#update-error').hidden = true;
+  $('#update-install').disabled = false;
+  $('#update-install').textContent = 'Descargar e instalar';
+  $('#modal-update').classList.add('is-open');
+}
+
+function closeUpdateModal() {
+  $('#modal-update').classList.remove('is-open');
+}
+
+async function startUpdate() {
+  upd.applying = true;   // al terminar la descarga, aplicar automáticamente
+  $('#update-error').hidden = true;
+  try {
+    await api.post('/api/update/download');
+  } catch (e) {
+    upd.applying = false;
+    $('#update-error').hidden = false;
+    $('#update-error').textContent = 'No se pudo iniciar la descarga: ' + e.message;
+  }
+}
+
+function initUpdates() {
+  $('#update-go').addEventListener('click', openUpdateModal);
+  $('#update-later').addEventListener('click', () => {
+    upd.dismissed = true;
+    $('#update-banner').hidden = true;
+  });
+  $('#update-install').addEventListener('click', startUpdate);
+  $('#update-modal-close').addEventListener('click', closeUpdateModal);
+  $('#update-cancel').addEventListener('click', async () => {
+    if (upd.applying) { try { await api.post('/api/update/cancel'); } catch {} upd.applying = false; }
+    closeUpdateModal();
+  });
+  // Primer chequeo enseguida y luego cada 30 s (por si la descarga avanza o
+  // aparece una versión más nueva mientras la app sigue abierta).
+  updateTick();
+  upd.poll = setInterval(updateTick, 30000);
+}
+
+document.addEventListener('DOMContentLoaded', () => { init(); initUpdates(); });
