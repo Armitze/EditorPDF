@@ -186,16 +186,28 @@ def stage_and_restart(zip_path):
         raise RuntimeError('La actualización no contiene el ejecutable esperado.')
 
     script = _write_apply_script(new_dir, root, os.getpid(), staging, zip_path)
-    # Lanzar el aplicador DESPRENDIDO de esta app: debe sobrevivir a que la app
-    # se cierre para poder reemplazar sus archivos.
+    # Lanzar el aplicador de forma que sobreviva al cierre de esta app (debe
+    # seguir vivo para reemplazar sus archivos) PERO pueda arrancar de verdad.
+    #
+    # DETACHED_PROCESS no sirve aquí: la app está compilada con --windowed (sin
+    # consola), así que el hijo desprendido nace sin handles estándar válidos y
+    # PowerShell muere antes de ejecutar nada (el aplicador ni siquiera escribía
+    # su log). Con CREATE_NO_WINDOW + los tres flujos redirigidos a DEVNULL, el
+    # proceso arranca correctamente y —comprobado— sigue vivo tras cerrarse la
+    # app, completando el reemplazo y el reinicio.
     creationflags = 0
+    stdio = {}
     if os.name == 'nt':
-        creationflags = subprocess.CREATE_NEW_PROCESS_GROUP | 0x00000008  # DETACHED_PROCESS
+        CREATE_NO_WINDOW = 0x08000000
+        creationflags = subprocess.CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
+        stdio = {'stdin': subprocess.DEVNULL,
+                 'stdout': subprocess.DEVNULL,
+                 'stderr': subprocess.DEVNULL}
     subprocess.Popen(
         ['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden',
          '-File', script],
         creationflags=creationflags, close_fds=True,
-        cwd=tempfile.gettempdir())
+        cwd=tempfile.gettempdir(), **stdio)
     return True
 
 
@@ -336,9 +348,21 @@ class UpdateManager:
     def start_download(self):
         """Empieza a descargar la versión disponible. Devuelve False si no aplica."""
         with self._lock:
-            if not self._available or self._state in ('downloading', 'applying'):
+            if self._state in ('downloading', 'applying'):
                 return False
             info = self._available
+        # Si aún no se ha comprobado (el chequeo del arranque puede no haber
+        # terminado cuando el usuario pulsa «descargar»), comprobar ahora mismo
+        # en vez de rendirse con «no hay actualización lista».
+        if not info:
+            info = check()
+            with self._lock:
+                self._available = info
+        if not info:
+            return False
+        with self._lock:
+            if self._state in ('downloading', 'applying'):
+                return False
             self._state = 'downloading'
             self._progress = 0.0
             self._error = None
