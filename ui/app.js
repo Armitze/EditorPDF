@@ -2594,10 +2594,12 @@ function init() {
 // Aquí solo se hace polling del estado y se pinta el aviso, las notas y el
 // progreso; el reemplazo y reinicio los hace un proceso externo (ver updater.py).
 const upd = {
-  poll: 0,
+  poll: 0,           // sondeo lento (30 s) del estado general
+  fastPoll: 0,       // sondeo rápido (1 s) durante la descarga
   available: null,   // release nuevo, o null
   dismissed: false,  // el usuario pulsó «Ahora no» esta sesión
   applying: false,
+  lastState: 'idle',
 };
 
 function bytesToMB(n) {
@@ -2632,12 +2634,24 @@ async function updateTick() {
   }
 
   // Cuando la descarga termina y el usuario ya dio a instalar, aplicar sola.
+  // Se guarda el estado para el flujo del modal (evita depender solo del flag).
+  upd.lastState = st.state;
   if (st.state === 'ready' && upd.applying) {
     upd.applying = false;
-    try { await api.post('/api/update/apply'); } catch (e) {
-      $('#update-error').hidden = false;
-      $('#update-error').textContent = 'No se pudo aplicar: ' + e.message;
-    }
+    await applyDownloadedUpdate();
+  }
+}
+
+// Lanza el apply de la actualización ya descargada, reflejando el error si lo hay.
+async function applyDownloadedUpdate() {
+  try {
+    await api.post('/api/update/apply');
+    // Éxito: el backend cierra la app; el aplicador la reabre actualizada.
+  } catch (e) {
+    $('#update-error').hidden = false;
+    $('#update-error').textContent = 'No se pudo aplicar: ' + e.message;
+    $('#update-install').disabled = false;
+    $('#update-install').textContent = 'Reintentar';
   }
 }
 
@@ -2679,18 +2693,60 @@ function openUpdateModal() {
 
 function closeUpdateModal() {
   $('#modal-update').classList.remove('is-open');
+  clearInterval(upd.fastPoll);
 }
 
+// Descarga (si hace falta) y aplica. Basado en ESTADO, no en flags: pregunta
+// al backend en qué punto está y actúa en consecuencia, con sondeo rápido
+// mientras el modal está abierto (no depende del tick lento de 30 s).
 async function startUpdate() {
-  upd.applying = true;   // al terminar la descarga, aplicar automáticamente
   $('#update-error').hidden = true;
+  const btn = $('#update-install');
+  btn.disabled = true;
   try {
-    await api.post('/api/update/download');
+    const st = await api.get('/api/update/status');
+    // Si ya hay una descarga lista de un intento anterior, aplicar directamente.
+    if (st.state === 'ready') {
+      $('#update-progress-wrap').hidden = false;
+      $('#update-progress-bar').style.width = '100%';
+      $('#update-progress-label').textContent = 'Instalando y reiniciando…';
+      await applyDownloadedUpdate();
+      return;
+    }
+    // Si no se está descargando ya, iniciar la descarga.
+    if (st.state !== 'downloading') {
+      await api.post('/api/update/download');
+    }
+    // Sondear cada segundo hasta que esté lista (o falle), y entonces aplicar.
+    upd.applying = true;   // el tick también puede rematar si este bucle no
+    pollUntilReady();
   } catch (e) {
-    upd.applying = false;
+    btn.disabled = false;
     $('#update-error').hidden = false;
     $('#update-error').textContent = 'No se pudo iniciar la descarga: ' + e.message;
   }
+}
+
+// Sondeo rápido durante la descarga: refresca la barra y, al llegar a «ready»,
+// aplica. Independiente del updateTick de 30 s para que la app no parezca colgada.
+function pollUntilReady() {
+  clearInterval(upd.fastPoll);
+  upd.fastPoll = setInterval(async () => {
+    let st;
+    try { st = await api.get('/api/update/status'); } catch { return; }
+    if ($('#modal-update').classList.contains('is-open')) renderUpdateModal(st);
+    if (st.state === 'downloading') return;         // sigue bajando
+    clearInterval(upd.fastPoll);
+    if (st.state === 'ready') {
+      upd.applying = false;
+      await applyDownloadedUpdate();
+    } else if (st.state === 'error') {
+      $('#update-error').hidden = false;
+      $('#update-error').textContent = st.error || 'La descarga falló.';
+      $('#update-install').disabled = false;
+      $('#update-install').textContent = 'Reintentar';
+    }
+  }, 1000);
 }
 
 function initUpdates() {
