@@ -2597,6 +2597,7 @@ const upd = {
   poll: 0,           // sondeo lento (30 s) del estado general
   fastPoll: 0,       // sondeo rápido (1 s) durante la descarga
   available: null,   // release nuevo, o null
+  current: null,     // versión instalada (para mostrarla en el modal)
   dismissed: false,  // el usuario pulsó «Ahora no» esta sesión
   applying: false,
   lastState: 'idle',
@@ -2614,6 +2615,7 @@ async function updateTick() {
   // Mostrar la versión actual en la barra de estado (útil para saber qué
   // versión corre y para confirmar de un vistazo que la actualización se aplicó).
   if (st.current) $('#status-version').textContent = 'v' + st.current;
+  upd.current = st.current || upd.current;
   // Fuera del .exe (desarrollo) no hay nada que actualizar.
   if (!st.supported) { clearInterval(upd.poll); return; }
   upd.available = st.available;
@@ -2681,7 +2683,7 @@ function openUpdateModal() {
   const a = upd.available;
   if (!a) return;
   $('#update-banner').hidden = true;
-  $('#update-ver-cur').textContent = 'Actual';
+  $('#update-ver-cur').textContent = upd.current ? `Actual v${upd.current}` : 'Actual';
   $('#update-ver-new').textContent = `Versión ${a.version}`;
   $('#update-notes').textContent = a.notes || 'Mejoras y correcciones.';
   $('#update-progress-wrap').hidden = true;
