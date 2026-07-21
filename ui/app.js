@@ -2609,6 +2609,9 @@ async function updateTick() {
   try {
     st = await api.get('/api/update/status');
   } catch { return; }
+  // Mostrar la versión actual en la barra de estado (útil para saber qué
+  // versión corre y para confirmar de un vistazo que la actualización se aplicó).
+  if (st.current) $('#status-version').textContent = 'v' + st.current;
   // Fuera del .exe (desarrollo) no hay nada que actualizar.
   if (!st.supported) { clearInterval(upd.poll); return; }
   upd.available = st.available;

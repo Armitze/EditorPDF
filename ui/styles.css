@@ -348,6 +348,7 @@ a{color:#2563a8}a:hover{color:#1d5290}
 #ocr-status.is-done{color:#2e9e6b}
 #ocr-status.is-pending{color:#9aa1ac}
 .sb-changes{margin-left:auto;display:flex;align-items:center;gap:6px;color:#8a919c}
+.sb-version{color:#9aa1ac;font-variant-numeric:tabular-nums;letter-spacing:.02em}
 
 /* ===== Modals ===== */
 .overlay{position:absolute;inset:0;z-index:100;background:rgba(30,38,50,.42);display:none;align-items:center;justify-content:center}
