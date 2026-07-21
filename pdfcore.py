@@ -1,5 +1,6 @@
 """Núcleo de manipulación de PDFs con PyMuPDF (fitz)."""
 import io
+import itertools
 import os
 import shutil
 import tempfile
@@ -7,10 +8,39 @@ import threading
 
 import fitz  # PyMuPDF
 
+import renderpool
+
 THUMB_WIDTH = 176
 PAGE_RENDER_SCALE = 2.0
 MAX_UNDO = 20
 _INVALID_FILENAME = '<>:"/\\|?*'
+
+# Identificador único de cada PdfState para las claves de caché de los workers
+# (id() puede reutilizarse tras el recolector; un contador nunca).
+_state_uid = itertools.count(1)
+
+
+def _try_remove(path):
+    """Borra `path` si se puede. True = ya no existe (o nunca existió)."""
+    try:
+        os.remove(path)
+        return True
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False   # un worker aún lo tiene abierto: se reintenta luego
+
+
+class PasswordRequired(Exception):
+    """El PDF necesita contraseña (o la recibida no es correcta).
+
+    `wrong` distingue «hay que pedirla» de «la que dieron no vale», para que la
+    interfaz pueda mostrar el mensaje adecuado.
+    """
+
+    def __init__(self, message, wrong=False):
+        super().__init__(message)
+        self.wrong = wrong
 
 
 def _hex_to_rgb(color):
@@ -38,20 +68,83 @@ class PdfState:
         self.path = None
         self.dirty = False
         self.rev = 0
+        # Cifrado: `encrypted` marca que el original pedía clave; `password` la
+        # guarda en memoria (nunca en disco) para poder reescribir el archivo al
+        # guardar sin que el usuario la reintroduzca.
+        self.encrypted = False
+        self.password = None
         self._undo = []
         self._redo = []
+        # Render en paralelo: instantánea en disco de la revisión actual, que
+        # los workers del pool abren en modo solo lectura (ver renderpool).
+        self._uid = next(_state_uid)
+        self._snap_path = None
+        self._snap_rev = None
+        self._old_snaps = []   # instantáneas viejas pendientes de borrar
 
     # ---------- ciclo de vida ----------
-    def open(self, path):
+    def open(self, path, password=None):
+        """Abre un PDF. Si está protegido, `password` debe traer la contraseña.
+
+        Lanza PasswordRequired si hace falta clave y no se dio (o es incorrecta),
+        para que la interfaz pueda pedirla en vez de fallar sin más.
+        """
         with self._lock:
             doc = fitz.open(path)
             if doc.needs_pass:
-                doc.close()
-                raise ValueError('El PDF está protegido con contraseña.')
+                # authenticate: 0 = no válida; 1 = usuario; 2 = dueño; 4 = ambas.
+                ok = doc.authenticate(password) if password else 0
+                if not ok:
+                    doc.close()
+                    raise PasswordRequired(
+                        'La contraseña no es correcta.' if password
+                        else 'El PDF está protegido con contraseña.',
+                        wrong=bool(password))
+                self.encrypted = True
+                self.password = password
+            else:
+                self.encrypted = False
+                self.password = None
             if self.doc:
                 self.doc.close()
             self.doc = doc
             self.path = path
+            self.dirty = False
+            self.rev += 1
+            self._undo.clear()
+            self._redo.clear()
+            return self.info()
+
+    def remove_password(self, path=None):
+        """Guarda el documento SIN cifrado (quita la contraseña).
+
+        `path`: destino; si es None se reescribe sobre el archivo actual. El
+        documento ya está autenticado (se abrió con la clave), así que basta con
+        guardar sin cifrado. A partir de aquí el PDF deja de pedir contraseña.
+        """
+        with self._lock:
+            doc = self._require()
+            if not self.encrypted:
+                raise ValueError('El documento no tiene contraseña.')
+            target = path or self.path
+            if not target:
+                raise ValueError('No hay ruta de destino.')
+            same = self.path and os.path.abspath(target) == os.path.abspath(self.path)
+            if same:
+                # No se puede reescribir el archivo que está abierto: vía temporal.
+                fd, tmp = tempfile.mkstemp(suffix='.pdf')
+                os.close(fd)
+                doc.save(tmp, encryption=fitz.PDF_ENCRYPT_NONE)
+                doc.close()
+                shutil.move(tmp, target)
+                self.doc = fitz.open(target)
+            else:
+                doc.save(target, encryption=fitz.PDF_ENCRYPT_NONE)
+                self.doc.close()
+                self.doc = fitz.open(target)
+            self.path = target
+            self.encrypted = False
+            self.password = None
             self.dirty = False
             self.rev += 1
             self._undo.clear()
@@ -65,7 +158,10 @@ class PdfState:
             self.doc = None
             self.path = None
             self.dirty = False
+            self.encrypted = False
+            self.password = None   # no dejar la clave en memoria al cerrar
             self.rev += 1
+            self._drop_snapshots()
 
     def info(self):
         with self._lock:
@@ -80,6 +176,7 @@ class PdfState:
                 'rev': self.rev,
                 'undo': len(self._undo),
                 'redo': len(self._redo),
+                'encrypted': self.encrypted,
             }
 
     def _require(self):
@@ -121,16 +218,74 @@ class PdfState:
             return self.info()
 
     # ---------- renderizado ----------
+    def _render_source(self):
+        """(cache_key, path) que los workers del pool deben abrir, o None.
+
+        Llamar con el lock cogido. Prepara (si no existe ya) una instantánea en
+        disco de la revisión actual: así los workers renderizan una copia de
+        solo lectura y nunca tocan el archivo original del usuario (que debe
+        poder reescribirse al guardar). Los documentos cifrados devuelven None
+        para no dejar copias descifradas en disco: esos se renderizan en el
+        proceso principal, como siempre.
+        """
+        if self.encrypted:
+            return None
+        if self._snap_rev != self.rev:
+            fd, tmp = tempfile.mkstemp(suffix='.pdf', prefix=renderpool.SNAP_PREFIX)
+            os.close(fd)
+            try:
+                if not self.dirty and self.path and os.path.isfile(self.path):
+                    shutil.copyfile(self.path, tmp)
+                else:
+                    self.doc.save(tmp)
+            except Exception:
+                _try_remove(tmp)
+                return None
+            if self._snap_path:
+                self._old_snaps.append(self._snap_path)
+            self._snap_path = tmp
+            self._snap_rev = self.rev
+            # Instantáneas viejas: borrarlas ya (si algún worker aún tiene una
+            # abierta fallará en Windows; se reintenta en la siguiente ocasión).
+            self._old_snaps = [p for p in self._old_snaps if not _try_remove(p)]
+        return (f'{self._uid}:{self.rev}', self._snap_path)
+
+    def _drop_snapshots(self):
+        if self._snap_path:
+            self._old_snaps.append(self._snap_path)
+            self._snap_path = None
+            self._snap_rev = None
+        self._old_snaps = [p for p in self._old_snaps if not _try_remove(p)]
+
     def page_png(self, index, scale=PAGE_RENDER_SCALE):
+        # Primero el pool de procesos (varias páginas a la vez, un núcleo cada
+        # una); si no está disponible, render clásico en este proceso.
+        with self._lock:
+            self._require()
+            src = self._render_source()
+        if src:
+            data = renderpool.render(src[0], src[1], index, scale=scale)
+            if data is not None:
+                return data
         with self._lock:
             page = self._require()[index]
             pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale), annots=True)
             return pix.tobytes('png')
 
-    def thumb_png(self, index):
+    def thumb_png(self, index, dpr=1.0):
+        # `dpr` = densidad de la pantalla: la miniatura se rasteriza a los
+        # píxeles físicos que ocupará (nítida con escalado de Windows >100%).
+        width = THUMB_WIDTH * max(1.0, min(3.0, dpr))
+        with self._lock:
+            self._require()
+            src = self._render_source()
+        if src:
+            data = renderpool.render(src[0], src[1], index, thumb_width=width)
+            if data is not None:
+                return data
         with self._lock:
             page = self._require()[index]
-            scale = THUMB_WIDTH / max(page.rect.width, 1)
+            scale = width / max(page.rect.width, 1)
             pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale), annots=True)
             return pix.tobytes('png')
 
@@ -138,6 +293,14 @@ class PdfState:
         with self._lock:
             rect = self._require()[index].rect
             return {'width': rect.width, 'height': rect.height}
+
+    def page_sizes(self):
+        """Tamaños de TODAS las páginas en una llamada (para la vista continua)."""
+        with self._lock:
+            doc = self._require()
+            return {'sizes': [{'width': p.rect.width, 'height': p.rect.height}
+                              for p in doc],
+                    'rev': self.rev}
 
     def words(self, index):
         """Palabras de la página con su recuadro (para la capa de texto seleccionable).
@@ -251,6 +414,26 @@ class PdfState:
             self.rev += 1
             return self.info()
 
+    def rotate_page(self, index=None, delta=90):
+        """Gira páginas `delta` grados (múltiplos de 90; negativo = antihorario).
+
+        `index` None = todo el documento; si no, solo esa página. La rotación es
+        una propiedad de la página (no se re-rasteriza nada), así que no hay
+        pérdida de calidad y se deshace con Ctrl+Z como cualquier otro cambio.
+        """
+        if delta % 90:
+            raise ValueError('El giro debe ser múltiplo de 90 grados.')
+        with self._lock:
+            doc = self._require()
+            idxs = range(doc.page_count) if index is None else [index]
+            self._snapshot()
+            for i in idxs:
+                page = doc[i]
+                page.set_rotation((page.rotation + delta) % 360)
+            self.dirty = True
+            self.rev += 1
+            return self.info()
+
     def delete_page(self, index):
         with self._lock:
             doc = self._require()
@@ -269,6 +452,13 @@ class PdfState:
             target = path or self.path
             if not target:
                 raise ValueError('No hay ruta de destino.')
+            # Un PDF que venía con clave debe seguir teniéndola al guardarlo: si
+            # no, el «Guardar como» (o el guardado no incremental) la quitaría sin
+            # avisar. Para quitarla está remove_password(), que es explícito.
+            keep = {}
+            if self.encrypted and self.password:
+                keep = {'encryption': fitz.PDF_ENCRYPT_AES_256,
+                        'user_pw': self.password, 'owner_pw': self.password}
             if self.path and os.path.abspath(target) == os.path.abspath(self.path):
                 try:
                     doc.save(target, incremental=True, encryption=fitz.PDF_ENCRYPT_KEEP)
@@ -276,12 +466,14 @@ class PdfState:
                     # Guardado incremental no disponible: reescribir vía archivo temporal.
                     fd, tmp = tempfile.mkstemp(suffix='.pdf')
                     os.close(fd)
-                    doc.save(tmp)
+                    doc.save(tmp, **keep)
                     doc.close()
                     shutil.move(tmp, target)
                     self.doc = fitz.open(target)
+                    if self.encrypted and self.password:
+                        self.doc.authenticate(self.password)
             else:
-                doc.save(target)
+                doc.save(target, **keep)
                 self.path = target
             self.dirty = False
             self.rev += 1
@@ -384,6 +576,40 @@ class PdfState:
             info['added'] = added
             return info
 
+    # ---------- exportar a Word ----------
+    def export_docx(self, target, indexes=None):
+        """Exporta a un .docx REAL de Word con el diseño reconstruido.
+
+        Antes se guardaba HTML renombrado a .doc: texto suelto sin el diseño de
+        la página. Ahora exportword reconstruye cada página al estilo de los
+        conversores en línea: fondo gráfico + texto editable posicionado.
+        `indexes`: páginas 0-based; None = todas.
+
+        La conversión corre FUERA del candado (tarda segundos): trabaja sobre
+        la instantánea de solo lectura del documento, así no bloquea el render
+        ni el resto de la interfaz mientras tanto.
+        """
+        import exportword
+        own_tmp = None
+        with self._lock:
+            self._require()
+            src = self._render_source()
+            if src:
+                path = src[1]
+            else:
+                # Documento cifrado (sin instantánea permanente): copia temporal
+                # solo durante la conversión, se borra al terminar.
+                fd, own_tmp = tempfile.mkstemp(suffix='.pdf')
+                os.close(fd)
+                self.doc.save(own_tmp)
+                path = own_tmp
+        try:
+            exportword.convert(path, target, indexes)
+        finally:
+            if own_tmp:
+                _try_remove(own_tmp)
+        return target
+
     # ---------- extracción ----------
     def text(self, index=None):
         with self._lock:
@@ -391,6 +617,118 @@ class PdfState:
             if index is None:
                 return '\n\n'.join(doc[i].get_text().strip() for i in range(doc.page_count)).strip()
             return doc[index].get_text().strip()
+
+    # ---------- búsqueda ----------
+    def search(self, query, limit=500):
+        """Busca `query` en todo el documento.
+
+        Devuelve una lista de coincidencias {page, rect, context}, en orden de
+        página. `rect` va en puntos PDF (mismo sistema que el render), para que
+        la interfaz pueda dibujar el resaltado encima de la página.
+        `context` es la línea donde aparece, para la lista de resultados.
+        """
+        query = (query or '').strip()
+        with self._lock:
+            doc = self._require()
+            if not query:
+                return []
+            out = []
+            for i in range(doc.page_count):
+                page = doc[i]
+                try:
+                    hits = page.search_for(query)
+                except Exception:
+                    continue
+                if not hits:
+                    continue
+                lines = self._page_lines(page)
+                for r in hits:
+                    out.append({
+                        'page': i,
+                        'rect': [r.x0, r.y0, r.x1, r.y1],
+                        'context': self._line_at(lines, r),
+                    })
+                    if len(out) >= limit:
+                        return out
+            return out
+
+    @staticmethod
+    def _page_lines(page):
+        """Líneas de la página con su recuadro, para dar contexto a cada hallazgo."""
+        lines = []
+        for block in page.get_text('dict').get('blocks', []):
+            for line in block.get('lines', []):
+                text = ''.join(s.get('text', '') for s in line.get('spans', []))
+                if text.strip():
+                    lines.append((fitz.Rect(line['bbox']), text.strip()))
+        return lines
+
+    @staticmethod
+    def _line_at(lines, rect):
+        """Texto de la línea que contiene `rect` (el que más se solapa)."""
+        best, best_area = '', 0
+        for lrect, text in lines:
+            inter = lrect & rect
+            area = abs(inter) if not inter.is_empty else 0
+            if area > best_area:
+                best, best_area = text, area
+        return best
+
+    # ---------- OCR (documentos escaneados) ----------
+    def ocr_text(self, index=None, lang=None, force=False):
+        """Texto de la página (o del documento) usando OCR donde haga falta.
+
+        En páginas con texto digital se devuelve ese texto tal cual (es exacto y
+        además instantáneo); solo se pasa por OCR lo que parece escaneado. Con
+        `force=True` se aplica OCR a todo.
+
+        Devuelve {'text', 'ocrPages': nº de páginas reconocidas, 'lang'}.
+        """
+        import ocr as ocr_mod
+        with self._lock:
+            doc = self._require()
+            idxs = range(doc.page_count) if index is None else [index]
+            lang = lang or ocr_mod.best_lang()
+            parts, n_ocr = [], 0
+            for i in idxs:
+                page = doc[i]
+                if force or ocr_mod.page_needs_ocr(page):
+                    parts.append(ocr_mod.page_text(page, lang))
+                    n_ocr += 1
+                else:
+                    parts.append(page.get_text().strip())
+            return {'text': '\n\n'.join(p for p in parts if p).strip(),
+                    'ocrPages': n_ocr, 'lang': lang}
+
+    def ocr_apply(self, index=None, lang=None):
+        """Añade capa de texto invisible sobre las páginas escaneadas.
+
+        Así el escaneo pasa a ser buscable y su texto seleccionable, sin cambiar
+        el aspecto de la página. Solo toca las páginas que lo necesitan.
+        """
+        import ocr as ocr_mod
+        with self._lock:
+            doc = self._require()
+            idxs = list(range(doc.page_count)) if index is None else [index]
+            targets = [i for i in idxs if ocr_mod.page_needs_ocr(doc[i])]
+            if not targets:
+                info = self.info()
+                info['ocrPages'] = 0
+                return info
+            lang = lang or ocr_mod.best_lang()
+            self._snapshot()
+            # Se reemplaza cada página escaneada por su versión con capa OCR.
+            for i in targets:
+                data = ocr_mod.ocr_pdf_page(doc[i], lang)
+                with fitz.open('pdf', data) as ocr_doc:
+                    doc.insert_pdf(ocr_doc, start_at=i + 1)
+                doc.delete_page(i)
+            self.dirty = True
+            self.rev += 1
+            info = self.info()
+            info['ocrPages'] = len(targets)
+            info['lang'] = lang
+            return info
 
     def tables(self, index):
         with self._lock:
@@ -445,10 +783,10 @@ class DocumentManager:
             self._next_id += 1
             return doc_id
 
-    def open(self, path):
+    def open(self, path, password=None):
         """Abre un PDF en un documento NUEVO y devuelve su info (con docId)."""
         state = PdfState()
-        info = state.open(path)          # puede lanzar (protegido, etc.)
+        info = state.open(path, password)   # puede lanzar PasswordRequired
         doc_id = self._new_id()
         with self._lock:
             self._docs[doc_id] = state

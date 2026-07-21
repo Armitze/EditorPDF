@@ -51,6 +51,12 @@
     <button id="btn-merge" class="btn-toolbar" title="Fusionar otro PDF al final del documento">
       <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="9" height="13" rx="1.6"/><rect x="12" y="7" width="9" height="13" rx="1.6"/></svg>Fusionar
     </button>
+    <button id="btn-rotate-left" class="btn-icon36" title="Girar a la izquierda (Ctrl+Mayús+L) · con Alt, todo el documento">
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8h9a5 5 0 0 1 5 5v1"/><path d="M6.5 4.5 3 8l3.5 3.5"/><rect x="9" y="14" width="11" height="7" rx="1.6"/></svg>
+    </button>
+    <button id="btn-rotate-right" class="btn-icon36" title="Girar a la derecha (Ctrl+Mayús+R) · con Alt, todo el documento">
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8h-9a5 5 0 0 0-5 5v1"/><path d="M17.5 4.5 21 8l-3.5 3.5"/><rect x="4" y="14" width="11" height="7" rx="1.6"/></svg>
+    </button>
 
     <span class="tb-sep"></span>
 
@@ -59,6 +65,10 @@
     </button>
     <button id="btn-export-modal" class="btn-toolbar" title="Exportar a Word, Excel o HTML">
       <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M8 11l4 4 4-4"/><path d="M5 19h14"/></svg>Exportar
+    </button>
+    <!-- Solo visible cuando el documento abierto está protegido con contraseña -->
+    <button id="btn-remove-pw" class="btn-toolbar" title="Guardar una copia sin contraseña" hidden>
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 7.5-2"/></svg>Quitar clave
     </button>
 
     <span class="tb-sep"></span>
@@ -74,9 +84,19 @@
     </button>
 
     <div class="toolbar-right">
-      <div class="search-box">
+      <div class="search-box" id="search-box">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#8a919c" stroke-width="1.8" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.6-3.6"/></svg>
-        <input placeholder="Buscar texto en el documento…">
+        <input id="search-input" placeholder="Buscar texto en el documento…" autocomplete="off" spellcheck="false">
+        <span class="search-count" id="search-count" hidden></span>
+        <button class="search-nav" id="search-prev" title="Anterior (Mayús+Enter)" hidden>
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 15l-6-6-6 6"/></svg>
+        </button>
+        <button class="search-nav" id="search-next" title="Siguiente (Enter)" hidden>
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+        </button>
+        <button class="search-nav" id="search-clear" title="Limpiar (Esc)" hidden>
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
       </div>
       <button id="btn-toggle-right" class="btn-icon36" title="Mostrar u ocultar el panel de propiedades">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/></svg>
@@ -113,14 +133,35 @@
         <div class="page-margin" id="page-margin">
           <div class="page-scale" id="page-scale">
 
-            <!-- Documento real (PDF abierto) -->
-            <div class="doc-page real-page" id="real-doc" hidden>
-              <img id="page-image" alt="Página del documento" draggable="false">
-              <div id="text-layer"></div>
-              <div id="annot-overlay">
-                <div id="draw-ghost-rect" hidden></div>
-                <svg id="draw-ghost-line" hidden><line x1="0" y1="0" x2="0" y2="0"/></svg>
-                <input id="annot-text-input" placeholder="Escribe y pulsa Enter…" hidden>
+            <!-- Documento real (PDF abierto): vista continua, una hoja por
+                 página apiladas verticalmente (app.js construye las páginas). -->
+            <div class="real-doc" id="real-doc" hidden></div>
+            <!-- Elementos de dibujo compartidos: app.js los mueve dentro de la
+                 página sobre la que se está dibujando en cada momento. -->
+            <div id="draw-extras" hidden>
+              <div id="draw-ghost-rect" hidden></div>
+              <svg id="draw-ghost-line" hidden><line x1="0" y1="0" x2="0" y2="0"/></svg>
+              <input id="annot-text-input" placeholder="Escribe y pulsa Enter…" hidden>
+            </div>
+
+            <!-- Pantalla de bienvenida: se muestra cuando no hay ningún PDF
+                 abierto (antes se veía aquí una factura de demostración). -->
+            <div class="doc-page welcome-page" id="welcome-doc" hidden>
+              <div class="welcome-inner">
+                <div class="welcome-art" aria-hidden="true">
+                  <svg viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <rect x="30" y="16" width="60" height="78" rx="6" fill="#fff" stroke="#d7dce4" stroke-width="2"/>
+                    <path d="M42 38h30M42 50h36M42 62h36M42 74h22" stroke="#dfe4ec" stroke-width="3.4" stroke-linecap="round"/>
+                    <circle cx="84" cy="82" r="20" fill="#eef3fb" stroke="#c4d3ea" stroke-width="2"/>
+                    <path d="M84 74v16M76 82h16" stroke="#5b8fd4" stroke-width="3.2" stroke-linecap="round"/>
+                  </svg>
+                </div>
+                <div class="welcome-title">Ningún documento abierto</div>
+                <div class="welcome-text">Abre un PDF para empezar a editarlo, o arrastra el archivo hasta aquí.</div>
+                <button class="welcome-btn" id="btn-welcome-open">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg>
+                  Abrir PDF
+                </button>
               </div>
             </div>
 
@@ -238,7 +279,7 @@
         <span class="zoom-label" id="zoom-label">100%</span>
         <button id="btn-zoom-in" class="zoom-btn" title="Acercar"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button>
         <span class="zoom-sep"></span>
-        <button id="btn-zoom-fit" class="zoom-fit" title="Ajustar al ancho"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3"/></svg>Ajustar</button>
+        <button id="btn-zoom-fit" class="zoom-fit" title="Ajustar la página a la ventana"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3"/></svg>Ajustar</button>
       </div>
     </main>
 
@@ -545,6 +586,28 @@ Total: $56,724.00</textarea>
         <div class="confirm-foot-right">
           <button id="confirm-cancel" class="btn-modal-cancel">Cancelar</button>
           <button id="confirm-save" class="btn-modal-primary">Guardar y cerrar</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== PDF PROTEGIDO: PEDIR CONTRASEÑA ===== -->
+  <div class="overlay" id="modal-password">
+    <div class="modal modal-confirm">
+      <div class="confirm-body">
+        <div class="confirm-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/><path d="M12 15v2"/></svg></div>
+        <div class="pw-main">
+          <div class="confirm-title">Documento protegido</div>
+          <div class="confirm-text"><strong id="pw-file">El documento</strong> está protegido con contraseña. Introdúcela para abrirlo.</div>
+          <input id="pw-input" class="rp-input pw-input" type="password" autocomplete="off"
+                 spellcheck="false" placeholder="Contraseña">
+          <div id="pw-error" class="pw-error" hidden>La contraseña no es correcta. Inténtalo de nuevo.</div>
+        </div>
+      </div>
+      <div class="modal-foot confirm-foot">
+        <div class="confirm-foot-right">
+          <button id="pw-cancel" class="btn-modal-cancel" data-close>Cancelar</button>
+          <button id="pw-accept" class="btn-modal-primary">Abrir</button>
         </div>
       </div>
     </div>

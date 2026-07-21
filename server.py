@@ -5,6 +5,7 @@ import csv
 import io
 import os
 import sys
+import threading
 import time
 
 from fastapi import Depends, FastAPI, HTTPException
@@ -12,7 +13,7 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from pdfcore import DocumentManager, PdfState
+from pdfcore import DocumentManager, PasswordRequired, PdfState
 
 
 def base_dir():
@@ -28,6 +29,12 @@ class WindowService:
         self.window = None
         self.allow_close = False  # el frontend lo pone en True tras confirmar
         self._maximized = False
+        # PDF protegido recibido por línea de comandos antes de que la interfaz
+        # existiera: se entrega en /api/docs para que pida la clave al arrancar.
+        self.pending_locked = None
+        # Serializa los avisos al frontend: dos archivos abiertos a la vez no
+        # deben ejecutar __openExternal de forma solapada.
+        self._notify_lock = threading.Lock()
         # Estado del arrastre de la barra de título (Aero Snap manual).
         self._drag = None  # dict con offset del cursor y geometría previa
 
@@ -110,19 +117,80 @@ class WindowService:
         self.window.maximize()
         self._maximized = True
 
+    def notify_open(self, doc_ids):
+        """Avisa al frontend de pestañas nuevas sin ocupar al worker de uvicorn.
+
+        `evaluate_js` es síncrono: espera a que el hilo de la UI ejecute el JS, y
+        ese JS (`__openExternal`) vuelve a llamar a la API HTTP. Lanzarlo desde el
+        worker que atiende /api/open-external lo dejaría esperando a la UI mientras
+        atiende la petición, así que lo hacemos en un hilo aparte y respondemos ya.
+        El lock evita que dos archivos abiertos a la vez ejecuten `__openExternal`
+        de forma solapada.
+        """
+        if self.window is None or not doc_ids:
+            return
+
+        def run():
+            with self._notify_lock:
+                try:
+                    self.window.evaluate_js(
+                        f'window.__openExternal && window.__openExternal({list(doc_ids)!r})')
+                except Exception:
+                    pass
+                self.focus()
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def notify_locked(self, paths):
+        """Avisa al frontend de PDFs protegidos para que pida la contraseña.
+
+        Mismo patrón que notify_open: en un hilo aparte, porque `evaluate_js`
+        espera al hilo de la UI y el JS vuelve a llamar a la API.
+        """
+        if self.window is None or not paths:
+            return
+
+        def run():
+            with self._notify_lock:
+                try:
+                    self.window.evaluate_js(
+                        f'window.__openLocked && window.__openLocked({list(paths)!r})')
+                except Exception:
+                    pass
+                self.focus()
+
+        threading.Thread(target=run, daemon=True).start()
+
     def focus(self):
-        """Trae la ventana al frente (al recibir un archivo de otra instancia)."""
+        """Trae la ventana al frente (al recibir un archivo de otra instancia).
+
+        Todo el trabajo se hace DENTRO del hilo de la UI y de forma asíncrona.
+        Windows exige que las propiedades de una ventana se toquen en su hilo
+        propietario: hacerlo desde otro hilo (como hacía `self.window.on_top = True`)
+        bloquea para siempre esperando la bomba de mensajes y congela la app —
+        justo lo que pasaba al abrir un segundo PDF con la ventana ya abierta.
+        `BeginInvoke` no espera respuesta del hilo de UI, así que no puede colgarse.
+        """
         if not self.window:
             return
         try:
-            if self._maximized:
-                self.window.restore()
-                self._maximized = False
-                self.window.maximize()
-                self._maximized = True
-            self.window.on_top = True
-            self.window.on_top = False
+            from System import Action
+            from webview.platforms import winforms as P
+
+            inst = P.BrowserView.instances.get(self.window.uid)
+            if inst is None:
+                return
+
+            def on_ui():
+                # Ya estamos en el hilo de UI: aquí sí es legal tocar la ventana.
+                inst.TopMost = True
+                inst.Activate()
+                inst.TopMost = False
+
+            inst.BeginInvoke(Action(on_ui))
         except Exception:
+            # Sin ventana WinForms (modo --server, otras plataformas): no hay nada
+            # que traer al frente.
             pass
 
     def _downloads(self, suggested):
@@ -183,6 +251,7 @@ class WindowService:
 
 class OpenBody(BaseModel):
     path: str | list[str] | None = None
+    password: str | None = None
 
 
 class AnnotBody(BaseModel):
@@ -201,6 +270,7 @@ class AnnotBody(BaseModel):
 class PagesBody(BaseModel):
     action: str
     page: int
+    scope: str = 'pg'   # pg = solo la página indicada | doc = todo el documento
 
 
 class SaveBody(BaseModel):
@@ -240,6 +310,14 @@ class SignBody(BaseModel):
 class TableExportBody(BaseModel):
     page: int
     fmt: str  # csv | excel
+
+
+class OcrBody(BaseModel):
+    scope: str = 'doc'          # doc | pg
+    page: int = 0
+    lang: str | None = None     # None = mejor idioma disponible (español si está)
+    apply: bool = False         # añadir capa de texto buscable al escaneo
+    force: bool = False         # OCR incluso si la página ya tiene texto digital
 
 
 def _doc_html(pdf: PdfState, indexes):
@@ -286,30 +364,46 @@ def create_app(manager: DocumentManager, windows: WindowService) -> FastAPI:
         if isinstance(paths, str):
             paths = [paths]
         opened = []
+        locked = []      # PDFs con contraseña: los pedirá el frontend
         for path in paths:
             if not os.path.isfile(path):
                 continue
             try:
                 opened.append(manager.open(path))
+            except PasswordRequired:
+                # No se descarta en silencio (antes se perdía aquí y el archivo
+                # simplemente no aparecía): se avisa al frontend para que pida
+                # la clave.
+                locked.append(path)
             except Exception:
                 pass
-        if not opened:
+        if not opened and not locked:
             raise HTTPException(400, 'No se pudo abrir el archivo recibido.')
+        if locked:
+            windows.notify_locked(locked)
+        if not opened:
+            # Todo lo recibido está protegido: la ventana ya está pidiendo la clave.
+            windows.focus()
+            return {'docs': [], 'locked': locked}
         ids = [d['docId'] for d in opened]
         # Avisar al frontend: que cargue las pestañas nuevas y active la primera.
-        if windows.window is not None:
-            try:
-                windows.window.evaluate_js(
-                    f'window.__openExternal && window.__openExternal({ids!r})')
-            except Exception:
-                pass
-        windows.focus()
-        return {'docs': opened}
+        # En un hilo aparte: evaluate_js bloquea hasta que el JS termina, y ese JS
+        # vuelve a llamar a esta API. Hacerlo aquí colgaría el worker de uvicorn y
+        # la ventana (deadlock al abrir dos PDFs seguidos).
+        windows.notify_open(ids)
+        return {'docs': opened, 'locked': locked}
 
     @app.get('/api/docs')
     def docs_list():
-        """Lista todas las pestañas abiertas (para reconstruir la UI al arrancar)."""
-        return {'docs': manager.list()}
+        """Lista todas las pestañas abiertas (para reconstruir la UI al arrancar).
+
+        `locked` trae el PDF protegido que llegó por línea de comandos, si lo
+        hubo: la interfaz lo recoge al arrancar y pide la contraseña. Se entrega
+        una sola vez.
+        """
+        locked = windows.pending_locked
+        windows.pending_locked = None
+        return {'docs': manager.list(), 'locked': locked}
 
     @app.get('/api/doc')
     def doc_info(pdf: PdfState = Depends(get_doc)):
@@ -328,7 +422,14 @@ def create_app(manager: DocumentManager, windows: WindowService) -> FastAPI:
             if not os.path.isfile(path):
                 raise HTTPException(404, f'No existe el archivo: {path}')
             try:
-                opened.append(manager.open(path))
+                opened.append(manager.open(path, body.password))
+            except PasswordRequired as e:
+                # 401 = «necesito la contraseña». El frontend la pide y reintenta
+                # mandando `password`. Se devuelve la ruta pendiente para que sepa
+                # con cuál reintentar cuando se abren varios archivos a la vez.
+                raise HTTPException(401, {
+                    'message': str(e), 'wrong': e.wrong,
+                    'path': path, 'name': os.path.basename(path)})
             except Exception as e:
                 raise HTTPException(400, str(e))
         # 'doc' = primera pestaña abierta (la que se activará); 'docs' = todas.
@@ -341,16 +442,21 @@ def create_app(manager: DocumentManager, windows: WindowService) -> FastAPI:
 
     @app.get('/api/page/{index}')
     def page_png(index: int, scale: float = 2.0, pdf: PdfState = Depends(get_doc)):
+        # Mínimo 0.2 (no 1.0): con el zoom alejado el frontend pide la escala
+        # EXACTA de pantalla; forzarla a 1 obligaba al navegador a reducir la
+        # imagen y el texto se veía suavizado.
         try:
-            data = pdf.page_png(index, max(1.0, min(6.0, scale)))
+            data = pdf.page_png(index, max(0.2, min(6.0, scale)))
         except Exception as e:
             raise HTTPException(400, str(e))
         return Response(data, media_type='image/png')
 
     @app.get('/api/thumb/{index}')
-    def thumb_png(index: int, pdf: PdfState = Depends(get_doc)):
+    def thumb_png(index: int, dpr: float = 1.0, pdf: PdfState = Depends(get_doc)):
+        # `dpr`: densidad de la pantalla (escalado de Windows), para que las
+        # miniaturas también se rendericen a los píxeles físicos reales.
         try:
-            data = pdf.thumb_png(index)
+            data = pdf.thumb_png(index, dpr)
         except Exception as e:
             raise HTTPException(400, str(e))
         return Response(data, media_type='image/png')
@@ -359,6 +465,14 @@ def create_app(manager: DocumentManager, windows: WindowService) -> FastAPI:
     def page_size(index: int, pdf: PdfState = Depends(get_doc)):
         try:
             return pdf.page_size(index)
+        except Exception as e:
+            raise HTTPException(400, str(e))
+
+    @app.get('/api/pagesizes')
+    def page_sizes(pdf: PdfState = Depends(get_doc)):
+        """Tamaños de todas las páginas (la vista continua los pide de una vez)."""
+        try:
+            return pdf.page_sizes()
         except Exception as e:
             raise HTTPException(400, str(e))
 
@@ -401,6 +515,11 @@ def create_app(manager: DocumentManager, windows: WindowService) -> FastAPI:
                 return pdf.duplicate_page(body.page)
             if body.action == 'delete':
                 return pdf.delete_page(body.page)
+            # Girar: `scope='doc'` gira todo el documento; si no, la página dada.
+            if body.action in ('rotate-left', 'rotate-right'):
+                delta = -90 if body.action == 'rotate-left' else 90
+                index = None if body.scope == 'doc' else body.page
+                return pdf.rotate_page(index, delta)
             raise ValueError(f'Acción desconocida: {body.action}')
         except HTTPException:
             raise
@@ -425,6 +544,34 @@ def create_app(manager: DocumentManager, windows: WindowService) -> FastAPI:
             return result
         except Exception as e:
             raise HTTPException(400, str(e))
+
+    @app.post('/api/remove-password')
+    def remove_password(body: SaveBody | None = None,
+                        pdf: PdfState = Depends(get_doc)):
+        """Quita la contraseña del documento y lo guarda sin cifrar.
+
+        Por defecto pregunta dónde guardarlo (no se pisa el original sin querer);
+        con saveAs=False reescribe el archivo actual.
+        """
+        info = pdf.info()
+        if not info.get('open'):
+            raise HTTPException(400, 'No hay ningún documento abierto.')
+        if not info.get('encrypted'):
+            raise HTTPException(400, 'El documento no tiene contraseña.')
+        target = None
+        if not (body and body.saveAs is False):
+            name = (info.get('name') or 'documento.pdf')
+            base = name[:-4] if name.lower().endswith('.pdf') else name
+            target = windows.save_dialog(f'{base}_sin_clave.pdf',
+                                         'Documento PDF (*.pdf)')
+            if not target:
+                return {'cancelled': True}
+        try:
+            result = pdf.remove_password(target)
+        except Exception as e:
+            raise HTTPException(400, str(e))
+        result['savedTo'] = pdf.path
+        return result
 
     @app.post('/api/split-groups')
     def split_groups(body: SplitGroupsBody, pdf: PdfState = Depends(get_doc)):
@@ -476,6 +623,41 @@ def create_app(manager: DocumentManager, windows: WindowService) -> FastAPI:
         except Exception as e:
             raise HTTPException(400, str(e))
 
+    @app.get('/api/search')
+    def search(q: str = '', pdf: PdfState = Depends(get_doc)):
+        """Busca texto en el documento. Devuelve las coincidencias con su página."""
+        try:
+            hits = pdf.search(q)
+        except Exception as e:
+            raise HTTPException(400, str(e))
+        return {'query': q, 'hits': hits, 'count': len(hits)}
+
+    @app.get('/api/ocr-status')
+    def ocr_status():
+        """Si el OCR está disponible y con qué idiomas (la interfaz lo consulta)."""
+        import ocr as ocr_mod
+        return ocr_mod.status()
+
+    @app.post('/api/ocr')
+    def run_ocr(body: OcrBody, pdf: PdfState = Depends(get_doc)):
+        """Extrae texto con OCR y, si se pide, deja el escaneo buscable.
+
+        scope: 'doc' = todo el documento | 'pg' = solo la página indicada.
+        apply: añade la capa de texto invisible sobre las páginas escaneadas.
+        """
+        import ocr as ocr_mod
+        if not ocr_mod.available():
+            raise HTTPException(503, 'El OCR no está disponible: falta Tesseract.')
+        index = None if body.scope == 'doc' else body.page
+        try:
+            result = pdf.ocr_text(index, body.lang, body.force)
+            if body.apply:
+                info = pdf.ocr_apply(index, body.lang)
+                result['doc'] = info
+        except Exception as e:
+            raise HTTPException(400, str(e))
+        return result
+
     @app.get('/api/tables')
     def tables(page: int = 0, pdf: PdfState = Depends(get_doc)):
         try:
@@ -522,15 +704,35 @@ def create_app(manager: DocumentManager, windows: WindowService) -> FastAPI:
             raise HTTPException(400, 'Rango de páginas no válido.')
         if not indexes:
             raise HTTPException(400, 'El rango no incluye ninguna página.')
-        name, html = _doc_html(pdf, indexes)
         try:
             if body.fmt == 'word':
-                target = windows.save_dialog(f'{name}.doc', 'Documento de Word (*.doc)')
-                if not target:
-                    return {'cancelled': True}
-                with open(target, 'w', encoding='utf-8') as fh:
-                    fh.write(html)
-            elif body.fmt == 'excel':
+                name = (pdf.info().get('name') or 'documento').rsplit('.', 1)[0]
+                # .docx REAL reconstruyendo el diseño (exportword, requiere
+                # python-docx). Solo si la librería no está instalada se cae al
+                # HTML .doc de siempre; un error DE conversión sí se reporta al
+                # usuario (no se degrada en silencio a un archivo peor).
+                try:
+                    import docx  # noqa: F401 — solo comprobar que existe
+                    have_docx = True
+                except ImportError:
+                    have_docx = False
+                if have_docx:
+                    target = windows.save_dialog(f'{name}.docx',
+                                                 'Documento de Word (*.docx)')
+                    if not target:
+                        return {'cancelled': True}
+                    pdf.export_docx(target, indexes)
+                else:
+                    target = windows.save_dialog(f'{name}.doc',
+                                                 'Documento de Word (*.doc)')
+                    if not target:
+                        return {'cancelled': True}
+                    _, html = _doc_html(pdf, indexes)
+                    with open(target, 'w', encoding='utf-8') as fh:
+                        fh.write(html)
+                return {'path': target}
+            name, html = _doc_html(pdf, indexes)
+            if body.fmt == 'excel':
                 found = []
                 for i in indexes:
                     found.extend(pdf.tables(i))

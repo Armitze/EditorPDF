@@ -3,3 +3,8 @@ __pycache__/
 build/
 dist/
 *.spec
+test_docs/
+
+# Binarios de Tesseract que se empaquetan con la app (~166 MB): no se versionan.
+# Se obtienen del instalador de UB-Mannheim; ver README (sección OCR).
+tesseract/
