@@ -416,6 +416,20 @@ a{color:#2563a8}a:hover{color:#1d5290}
 .real-doc.is-drawing .pp-annot{pointer-events:auto;cursor:crosshair}
 .real-doc.is-drawing .pp-text{user-select:none}
 
+/* Handles para mover anotaciones con el puntero. La capa sigue sin capturar el
+   ratón (así se puede seleccionar el texto de debajo); solo los handles lo
+   hacen. Un contorno tenue al pasar por encima indica que se pueden arrastrar. */
+.real-doc.can-move-annots .pp-annot{pointer-events:none}
+.annot-handle{position:absolute;pointer-events:auto;cursor:move;
+  border:1px solid transparent;border-radius:3px;box-sizing:border-box;
+  transition:background .1s,border-color .1s}
+.annot-handle:hover{background:rgba(37,99,168,.10);
+  border-color:rgba(37,99,168,.55)}
+.annot-handle.is-dragging{background:rgba(37,99,168,.16);
+  border:1px dashed #2563a8;border-radius:3px}
+/* Al arrastrar, dejar que el handle se vea aunque salga del borde de la hoja. */
+.pp-annot:has(.annot-handle.is-dragging){overflow:visible}
+
 /* Resaltados de la búsqueda: no capturan el ratón. */
 .pp-search{z-index:3;pointer-events:none}
 .search-hit{position:absolute;background:rgba(255,214,0,.42);

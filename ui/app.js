@@ -628,6 +628,13 @@ function ensurePage(el) {
     el.dataset.textKey = textKey;
     loadPageText(el, i, textKey);
   }
+  // Handles para mover anotaciones (solo con el puntero). Se recargan cuando
+  // cambia la revisión (una anotación nueva o movida) o la página aparece.
+  const annotKey = `${state.activeTabId}|${rev}|${i}`;
+  if (state.tool === 'select' && el.dataset.annotKey !== annotKey) {
+    el.dataset.annotKey = annotKey;
+    loadAnnotHandles(el, i, annotKey);
+  }
 }
 
 // Devuelve los elementos de dibujo compartidos a su contenedor neutro (viven
@@ -698,7 +705,11 @@ function renderDoc() {
     }
     const drawing = state.tool !== 'select';
     $('#real-doc').classList.toggle('is-drawing', drawing);
+    $('#real-doc').classList.toggle('can-move-annots', !drawing);
     if (drawing) hideSelPopup();
+    // Con el puntero se pintan los handles para arrastrar anotaciones; con
+    // cualquier herramienta de dibujo se retiran (estorbarían al dibujar).
+    refreshAnnotHandles();
     return;
   }
   if (builtDocKey) {
@@ -1819,6 +1830,122 @@ function initDrawing() {
   input.addEventListener('blur', () => { input.hidden = true; });
 }
 
+/* ===== Mover anotaciones con el puntero ===== */
+// Con la herramienta «puntero» (select) se pintan recuadros invisibles sobre
+// cada anotación movible; arrastrarlos reposiciona la anotación en el PDF.
+// Las anotaciones van «quemadas» en la imagen de la página, así que el handle
+// es la única superficie agarrable: al soltar se llama a /api/annot/move y la
+// página se re-renderiza con la anotación en su sitio nuevo.
+const annotDrag = { active: false };
+
+// Carga los handles de una hoja. `el` es el .pdf-page; `key` evita pintar una
+// respuesta tardía sobre una hoja que ya cambió de revisión.
+async function loadAnnotHandles(el, index, key) {
+  const layer = el.querySelector('.pp-annot');
+  if (!layer) return;
+  const clear = () => layer.querySelectorAll('.annot-handle').forEach(h => h.remove());
+  if (state.tool !== 'select') { clear(); return; }
+  // Token de carga: si mientras esperamos la red se dispara otra carga sobre
+  // esta misma hoja, aquella pondrá un token nuevo y esta respuesta se
+  // descarta. Así dos llamadas casi simultáneas no duplican los handles.
+  const token = (el._annotToken || 0) + 1;
+  el._annotToken = token;
+  let data;
+  try {
+    data = await api.get(`/api/annots/${index}`);
+  } catch { return; }
+  if (el._annotToken !== token || el.dataset.annotKey !== key
+      || !el.isConnected || state.tool !== 'select') return;
+  clear();   // limpiar SOLO cuando vamos a repintar, ya con datos frescos
+  const t = activeTab();
+  const sz = t && t.pageSizes && t.pageSizes[index];
+  const f = PAGE_DISPLAY_WIDTH / ((sz && sz.width) || PAGE_DISPLAY_WIDTH);
+  for (const a of data.annots) {
+    const [x0, y0, x1, y1] = a.rect;
+    const h = document.createElement('div');
+    h.className = 'annot-handle';
+    h.style.left = (x0 * f) + 'px';
+    h.style.top = (y0 * f) + 'px';
+    h.style.width = Math.max(8, (x1 - x0) * f) + 'px';
+    h.style.height = Math.max(8, (y1 - y0) * f) + 'px';
+    h.dataset.xref = a.xref;
+    h.dataset.page = index;
+    layer.appendChild(h);
+  }
+}
+
+// Refresca los handles de todas las hojas visibles (al cambiar de herramienta
+// o tras crear/mover una anotación).
+function refreshAnnotHandles() {
+  const rd = $('#real-doc');
+  for (const el of rd.children) {
+    if (!el._visible && el !== rd.firstElementChild) continue;
+    const i = Number(el.dataset.page);
+    const key = `${state.activeTabId}|${state.doc.rev}|${i}`;
+    el.dataset.annotKey = key;
+    loadAnnotHandles(el, i, key);
+  }
+}
+
+function initAnnotDrag() {
+  const rd = $('#real-doc');
+
+  rd.addEventListener('pointerdown', e => {
+    if (state.tool !== 'select') return;
+    const handle = e.target.closest('.annot-handle');
+    if (!handle) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const layer = handle.closest('.pp-annot');
+    const rect = layer.getBoundingClientRect();
+    const zf = (rect.width || PAGE_DISPLAY_WIDTH) / PAGE_DISPLAY_WIDTH;
+    annotDrag.active = true;
+    annotDrag.handle = handle;
+    annotDrag.zf = zf;
+    annotDrag.startX = e.clientX;
+    annotDrag.startY = e.clientY;
+    annotDrag.baseLeft = parseFloat(handle.style.left);
+    annotDrag.baseTop = parseFloat(handle.style.top);
+    handle.classList.add('is-dragging');
+    handle.setPointerCapture(e.pointerId);
+  });
+
+  rd.addEventListener('pointermove', e => {
+    if (!annotDrag.active) return;
+    const dx = (e.clientX - annotDrag.startX) / annotDrag.zf;
+    const dy = (e.clientY - annotDrag.startY) / annotDrag.zf;
+    annotDrag.handle.style.left = (annotDrag.baseLeft + dx) + 'px';
+    annotDrag.handle.style.top = (annotDrag.baseTop + dy) + 'px';
+  });
+
+  rd.addEventListener('pointerup', async e => {
+    if (!annotDrag.active) return;
+    annotDrag.active = false;
+    const handle = annotDrag.handle;
+    handle.classList.remove('is-dragging');
+    // Desplazamiento en px de lienzo base (768) -> puntos PDF.
+    const dxPx = parseFloat(handle.style.left) - annotDrag.baseLeft;
+    const dyPx = parseFloat(handle.style.top) - annotDrag.baseTop;
+    if (Math.abs(dxPx) < 2 && Math.abs(dyPx) < 2) return;   // clic, no arrastre
+    const page = Number(handle.dataset.page);
+    const t = activeTab();
+    const sz = t && t.pageSizes && t.pageSizes[page];
+    const f = ((sz && sz.width) || PAGE_DISPLAY_WIDTH) / PAGE_DISPLAY_WIDTH;
+    try {
+      const info = await api.post('/api/annot/move', {
+        page,
+        xref: Number(handle.dataset.xref),
+        dx: dxPx * f,
+        dy: dyPx * f,
+      });
+      await applyDoc(info);
+    } catch (err) {
+      toast('No se pudo mover: ' + err.message);
+      refreshAnnotHandles();   // devolver el handle a su sitio real
+    }
+  });
+}
+
 /* ===== Capa de texto seleccionable + resaltado de texto (estilo Adobe) ===== */
 
 // Carga las palabras de la página `index` en la capa de texto de SU hoja.
@@ -2564,6 +2691,7 @@ function init() {
   });
 
   initDrawing();
+  initAnnotDrag();
   initTextSelection();
   render();
 

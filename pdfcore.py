@@ -348,16 +348,14 @@ class PdfState:
                 r = fitz.Rect(rect)
                 if r.height < 18:
                     r.y1 = r.y0 + 18
-                # Un FreeText NO admite set_colors(stroke=…) (lanza ValueError
-                # en versiones recientes de PyMuPDF) y eso dejaba la anotación
-                # a medias, sin update(): el texto no aparecía. El color va en
-                # el borde de la creación; el borde de color exigiría richtext,
-                # así que se deja un contorno neutro y el foco es que el texto
-                # salga. text_color oscuro sobre fondo blanco = legible.
+                # Texto libre SIN caja: nada de fill_color (dejaba un recuadro
+                # blanco feo sobre el documento) ni borde. Solo el texto, como
+                # si se escribiera directamente sobre la página. Un FreeText no
+                # admite set_colors(stroke=…) (ValueError en PyMuPDF recientes),
+                # así que el color/estado se fija todo en la creación.
                 annot = page.add_freetext_annot(r, text or ' ', fontsize=12,
-                                                text_color=(0.16, 0.19, 0.23),
-                                                fill_color=(1, 1, 1))
-                annot.set_border(width=0.8)
+                                                text_color=(0.16, 0.19, 0.23))
+                annot.set_border(width=0)
                 annot.set_opacity(max(0.05, min(1.0, opacity)))
                 annot.update()
                 self.dirty = True
@@ -403,6 +401,56 @@ class PdfState:
         with self._lock:
             page = self._require()[index]
             return sum(1 for _ in page.annots())
+
+    def annots(self, index):
+        """Anotaciones movibles de la página, con su xref y recuadro en puntos.
+
+        Solo las que tiene sentido reposicionar con el puntero (texto libre,
+        líneas/flechas, formas). El resaltado/subrayado va pegado a un texto y
+        moverlo no tendría sentido, así que se omite. El `xref` identifica la
+        anotación de forma estable entre revisiones (para moverla luego).
+        """
+        movable = {
+            fitz.PDF_ANNOT_FREE_TEXT, fitz.PDF_ANNOT_LINE,
+            fitz.PDF_ANNOT_SQUARE, fitz.PDF_ANNOT_CIRCLE,
+            fitz.PDF_ANNOT_POLYGON, fitz.PDF_ANNOT_POLY_LINE,
+            fitz.PDF_ANNOT_STAMP, fitz.PDF_ANNOT_INK,
+        }
+        with self._lock:
+            page = self._require()[index]
+            out = []
+            for a in page.annots():
+                if a.type[0] not in movable:
+                    continue
+                r = a.rect
+                out.append({'xref': a.xref, 'kind': a.type[1],
+                            'rect': [r.x0, r.y0, r.x1, r.y1]})
+            return out
+
+    def move_annot(self, index, xref, dx, dy):
+        """Desplaza la anotación `xref` de la página `index` en (dx, dy) puntos.
+
+        Reubica el recuadro conservando su tamaño; PyMuPDF regenera la
+        apariencia al hacer update(). Devuelve el nuevo recuadro para que la
+        interfaz confirme la posición sin reconsultar toda la página.
+        """
+        with self._lock:
+            page = self._require()[index]
+            target = None
+            for a in page.annots():
+                if a.xref == xref:
+                    target = a
+                    break
+            if target is None:
+                raise ValueError('La anotación ya no existe.')
+            self._snapshot()
+            r = target.rect
+            new = fitz.Rect(r.x0 + dx, r.y0 + dy, r.x1 + dx, r.y1 + dy)
+            target.set_rect(new)
+            target.update()
+            self.dirty = True
+            self.rev += 1
+            return self.info()
 
     # ---------- páginas ----------
     def add_page(self, index):

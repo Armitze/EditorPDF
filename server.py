@@ -310,6 +310,13 @@ class SignBody(BaseModel):
     opacity: float = 1.0       # 0..1
 
 
+class MoveAnnotBody(BaseModel):
+    page: int
+    xref: int
+    dx: float          # desplazamiento en puntos PDF
+    dy: float
+
+
 class TableExportBody(BaseModel):
     page: int
     fmt: str  # csv | excel
@@ -571,6 +578,21 @@ def create_app(manager: DocumentManager, windows: WindowService) -> FastAPI:
             return pdf.add_annot(body.page, body.kind, body.color, body.width,
                                  body.opacity, body.rect, body.p1, body.p2, body.text,
                                  body.quads)
+        except Exception as e:
+            raise HTTPException(400, str(e))
+
+    @app.get('/api/annots/{index}')
+    def list_annots(index: int, pdf: PdfState = Depends(get_doc)):
+        """Anotaciones movibles de la página (para arrastrarlas con el puntero)."""
+        try:
+            return {'annots': pdf.annots(index)}
+        except Exception as e:
+            raise HTTPException(400, str(e))
+
+    @app.post('/api/annot/move')
+    def move_annot(body: MoveAnnotBody, pdf: PdfState = Depends(get_doc)):
+        try:
+            return pdf.move_annot(body.page, body.xref, body.dx, body.dy)
         except Exception as e:
             raise HTTPException(400, str(e))
 
