@@ -24,6 +24,29 @@ from pdfcore import DocumentManager, PasswordRequired
 from server import WindowService, create_app
 
 
+def _unblock_package():
+    """Quita la marca «descargado de Internet» de los binarios del paquete.
+
+    Al bajar el .zip con el navegador y extraerlo con el Explorador, todos los
+    archivos heredan la marca (Zone.Identifier). .NET Framework se niega a
+    cargar ensamblados marcados, así que pythonnet no puede cargar
+    Python.Runtime.dll y pywebview muere al arrancar («Failed to resolve
+    Python.Runtime.Loader.Initialize»). Borrar el stream alternativo equivale
+    al botón «Desbloquear» de Propiedades, archivo por archivo.
+    """
+    if not getattr(sys, 'frozen', False):
+        return
+    root = os.path.dirname(sys.executable)
+    for dirpath, _dirs, files in os.walk(root):
+        for name in files:
+            if not name.lower().endswith(('.dll', '.pyd', '.exe')):
+                continue
+            try:
+                os.remove(os.path.join(dirpath, name) + ':Zone.Identifier')
+            except OSError:
+                pass    # no estaba marcado (lo normal) o no hay permisos
+
+
 def free_port():
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(('127.0.0.1', 0))
@@ -135,6 +158,10 @@ def _forward_to_primary(path, wait=0.0):
 
 
 def main():
+    # Antes de nada: si el paquete viene con la marca de Internet (instalación
+    # manual desde el zip), desbloquearlo o pywebview no podrá ni arrancar.
+    _unblock_package()
+
     parser = argparse.ArgumentParser(prog='PDFEditorPro')
     parser.add_argument('file', nargs='?', help='PDF a abrir')
     parser.add_argument('--server', action='store_true',
