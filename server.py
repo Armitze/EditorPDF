@@ -4,6 +4,7 @@ import binascii
 import csv
 import io
 import os
+import re
 import sys
 import threading
 import time
@@ -335,6 +336,60 @@ def _tables_html(tables):
             for row in t['rows'])
         parts.append(f'<table border="1">{rows}</table><br>')
     return ''.join(parts)
+
+
+_NUM_RE = re.compile(r'^-?\$?[\d.,]*\d$')
+
+
+def _xlsx_value(text):
+    """Celda para Excel: número de verdad si el texto lo es, si no el texto.
+
+    Entiende separador de miles y decimal en ambos convenios (1,234.56 y
+    1.234,56): el último . o , con uno o dos dígitos detrás es el decimal.
+    Los códigos con cero inicial ("017845") se conservan como texto.
+    """
+    t = text.strip()
+    if not _NUM_RE.match(t) or t in ('-', '$'):
+        return text
+    s = t.lstrip('-$')
+    if s.startswith('0') and '.' not in s and ',' not in s and len(s) > 1:
+        return text                      # "017845": código, no cantidad
+    last = max(s.rfind('.'), s.rfind(','))
+    if last != -1 and 1 <= len(s) - last - 1 <= 2:
+        s = s[:last].replace('.', '').replace(',', '') + '.' + s[last + 1:]
+    else:
+        s = s.replace('.', '').replace(',', '')
+    try:
+        value = float(s)
+    except ValueError:
+        return text
+    if t.startswith('-'):
+        value = -value
+    return int(value) if value == int(value) and abs(value) < 1e15 else value
+
+
+def _write_xlsx(target, tables):
+    """Escribe las tablas en un .xlsx real (una hoja, tablas separadas)."""
+    from openpyxl import Workbook
+    wb = Workbook()
+    ws = wb.active
+    ws.title = 'Tablas'
+    first = True
+    for t in tables:
+        if not first:
+            ws.append([])
+        first = False
+        for row in t['rows']:
+            ws.append([_xlsx_value(c) for c in row])
+    wb.save(target)
+
+
+def _have_openpyxl():
+    try:
+        import openpyxl  # noqa: F401
+        return True
+    except ImportError:
+        return False
 
 
 def create_app(manager: DocumentManager, windows: WindowService) -> FastAPI:
@@ -689,6 +744,12 @@ def create_app(manager: DocumentManager, windows: WindowService) -> FastAPI:
                 writer.writerows(t['rows'])
             with open(target, 'w', newline='', encoding='utf-8-sig') as fh:
                 fh.write(buf.getvalue())
+        elif _have_openpyxl():
+            target = windows.save_dialog(f'{name}_tabla.xlsx',
+                                         'Libro de Excel (*.xlsx)')
+            if not target:
+                return {'cancelled': True}
+            _write_xlsx(target, found)
         else:
             target = windows.save_dialog(f'{name}_tabla.xls', 'Excel (*.xls)')
             if not target:
@@ -743,12 +804,19 @@ def create_app(manager: DocumentManager, windows: WindowService) -> FastAPI:
                     found.extend(pdf.tables(i))
                 if not found:
                     raise HTTPException(400, 'No se detectaron tablas en el rango indicado.')
-                target = windows.save_dialog(f'{name}.xls', 'Excel (*.xls)')
-                if not target:
-                    return {'cancelled': True}
-                with open(target, 'w', encoding='utf-8') as fh:
-                    fh.write('<html><head><meta charset="utf-8"></head><body>'
-                             + _tables_html(found) + '</body></html>')
+                if _have_openpyxl():
+                    target = windows.save_dialog(f'{name}.xlsx',
+                                                 'Libro de Excel (*.xlsx)')
+                    if not target:
+                        return {'cancelled': True}
+                    _write_xlsx(target, found)
+                else:
+                    target = windows.save_dialog(f'{name}.xls', 'Excel (*.xls)')
+                    if not target:
+                        return {'cancelled': True}
+                    with open(target, 'w', encoding='utf-8') as fh:
+                        fh.write('<html><head><meta charset="utf-8"></head><body>'
+                                 + _tables_html(found) + '</body></html>')
             else:
                 target = windows.save_dialog(f'{name}.html', 'Página web (*.html)')
                 if not target:

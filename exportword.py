@@ -43,6 +43,9 @@ def _font_info(name):
     """
     raw = _SUBSET_RE.sub('', name or '')
     low = raw.lower()
+    if 'glyphless' in low:
+        # Fuente sintética de la capa OCR de Tesseract: no existe en Word.
+        return ('Arial', False, False)
     bold = 'bold' in low
     italic = 'italic' in low or 'oblique' in low
     base = re.split(r'[-,]', raw)[0].strip()
@@ -141,8 +144,14 @@ def _background_xml(doc_pr_id, rid, w_pt, h_pt):
     )
 
 
-def _page_background_png(src_doc, index):
-    """PNG de la página SIN su texto (solo gráficos, imágenes y colores)."""
+def _page_background_png(src_doc, index, hide_rects=None):
+    """PNG de la página SIN su texto (solo gráficos, imágenes y colores).
+
+    `hide_rects` (en puntos PDF) se pintan de blanco sobre la imagen: en un
+    escaneo el texto son píxeles de la foto y las redacciones no lo quitan,
+    así que se blanquean los recuadros de las palabras que el OCR reconoció
+    para que el texto editable que va encima no salga duplicado.
+    """
     tmp = fitz.open()
     tmp.insert_pdf(src_doc, from_page=index, to_page=index)
     page = tmp[0]
@@ -151,6 +160,16 @@ def _page_background_png(src_doc, index):
                           graphics=fitz.PDF_REDACT_LINE_ART_NONE,
                           text=fitz.PDF_REDACT_TEXT_REMOVE)
     pix = page.get_pixmap(dpi=BG_DPI, annots=True)
+    if hide_rects:
+        sc = BG_DPI / 72.0
+        pad = 1.5 * sc
+        white = (255,) * pix.n
+        for r in hide_rects:
+            ir = fitz.IRect(int(r.x0 * sc - pad), int(r.y0 * sc - pad),
+                            int(r.x1 * sc + pad) + 1, int(r.y1 * sc + pad) + 1)
+            ir = ir & pix.irect
+            if not ir.is_empty:
+                pix.set_rect(ir, white)
     data = pix.tobytes('png')
     tmp.close()
     return data
@@ -188,14 +207,25 @@ def convert(pdf_path, target, indexes=None):
         host_run = host.add_run('')
         host_run.font.size = Pt(1)
 
+        blocks = page.get_text('dict').get('blocks', [])
+        # Palabras de la capa OCR (fuente GlyphLess de Tesseract): su tinta
+        # está en la imagen escaneada, no en la capa de texto, así que hay que
+        # blanquearla del fondo para no verla dos veces.
+        ocr_rects = [fitz.Rect(s['bbox'])
+                     for b in blocks if b.get('type') == 0
+                     for l in b.get('lines', []) for s in l.get('spans', [])
+                     if 'glyphless' in (s.get('font') or '').lower()
+                     and s.get('text', '').strip()]
+
         # 1) Fondo: la página entera sin texto, detrás de todo.
-        rid, _ = docx.part.get_or_add_image(io.BytesIO(_page_background_png(src, i)))
+        rid, _ = docx.part.get_or_add_image(
+            io.BytesIO(_page_background_png(src, i, ocr_rects)))
         host._p.append(parse_xml(
             f'<w:r {ns}>{_background_xml(next_id, rid, rect.width, rect.height)}</w:r>'))
         next_id += 1
 
         # 2) Texto: un cuadro flotante por línea, en su posición exacta.
-        for block in page.get_text('dict').get('blocks', []):
+        for block in blocks:
             if block.get('type') != 0:
                 continue
             for line in block.get('lines', []):

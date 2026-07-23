@@ -718,10 +718,17 @@ class PdfState:
             lang = lang or ocr_mod.best_lang()
             self._snapshot()
             # Se reemplaza cada página escaneada por su versión con capa OCR.
+            # Tesseract devuelve la página a 1pt por píxel (4,17x más grande a
+            # 300 dpi), así que se reencaja en una página del tamaño original:
+            # si no, exportar a Word produce páginas gigantes y las tolerancias
+            # de detección de tablas dejan de cuadrar.
             for i in targets:
+                rect = doc[i].rect
                 data = ocr_mod.ocr_pdf_page(doc[i], lang)
                 with fitz.open('pdf', data) as ocr_doc:
-                    doc.insert_pdf(ocr_doc, start_at=i + 1)
+                    page = doc.new_page(i + 1, width=rect.width,
+                                        height=rect.height)
+                    page.show_pdf_page(page.rect, ocr_doc, 0)
                 doc.delete_page(i)
             self.dirty = True
             self.rev += 1
@@ -733,13 +740,28 @@ class PdfState:
     def tables(self, index):
         with self._lock:
             page = self._require()[index]
-            finder = page.find_tables()
-            out = []
-            for t in finder.tables:
-                rows = [[('' if c is None else str(c)) for c in row] for row in t.extract()]
-                if rows:
-                    out.append({'rows': rows, 'cols': t.col_count, 'nrows': t.row_count})
+            out = self._extract_tables(page.find_tables())
+            if not out:
+                # En un escaneo con capa OCR no hay líneas vectoriales que
+                # delimiten la tabla (los bordes son píxeles de la imagen):
+                # se detectan las líneas en la propia imagen y se rellenan las
+                # celdas con las palabras del OCR.
+                import scantables
+                out = scantables.page_tables(page)
+            if not out:
+                # Último recurso: deducir la tabla por la alineación del texto.
+                out = self._extract_tables(page.find_tables(strategy='text'))
             return out
+
+    @staticmethod
+    def _extract_tables(finder):
+        out = []
+        for t in finder.tables:
+            rows = [[('' if c is None else str(c)) for c in row] for row in t.extract()]
+            rows = [r for r in rows if any(c.strip() for c in r)]
+            if rows:
+                out.append({'rows': rows, 'cols': t.col_count, 'nrows': len(rows)})
+        return out
 
     def html(self, indexes):
         with self._lock:
