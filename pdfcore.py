@@ -348,11 +348,21 @@ class PdfState:
                 r = fitz.Rect(rect)
                 if r.height < 18:
                     r.y1 = r.y0 + 18
+                # Un FreeText NO admite set_colors(stroke=…) (lanza ValueError
+                # en versiones recientes de PyMuPDF) y eso dejaba la anotación
+                # a medias, sin update(): el texto no aparecía. El color va en
+                # el borde de la creación; el borde de color exigiría richtext,
+                # así que se deja un contorno neutro y el foco es que el texto
+                # salga. text_color oscuro sobre fondo blanco = legible.
                 annot = page.add_freetext_annot(r, text or ' ', fontsize=12,
                                                 text_color=(0.16, 0.19, 0.23),
                                                 fill_color=(1, 1, 1))
                 annot.set_border(width=0.8)
-                annot.set_colors(stroke=rgb)
+                annot.set_opacity(max(0.05, min(1.0, opacity)))
+                annot.update()
+                self.dirty = True
+                self.rev += 1
+                return self.info()
             else:
                 raise ValueError(f'Herramienta desconocida: {kind}')
             annot.set_opacity(max(0.05, min(1.0, opacity)))

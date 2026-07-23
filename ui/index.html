@@ -526,6 +526,16 @@ Total: $56,724.00</textarea>
           <div class="export-opt"><div class="rp-label">Rango de páginas</div><input id="export-range" class="rp-input" value="1-8"></div>
           <div class="export-opt"><div class="rp-label">Calidad de imagen</div><select class="rp-select rp-select-flat"><option>Alta (300 dpi)</option><option>Media (150 dpi)</option></select></div>
         </div>
+        <!-- Solo relevante para Excel: cómo interpretar los números al pasarlos
+             a celdas numéricas. Se muestra/oculta según el formato elegido. -->
+        <div class="export-opt export-opt-numfmt" id="export-numfmt-row" hidden>
+          <div class="rp-label">Formato de números (Excel)</div>
+          <select id="export-numfmt" class="rp-select rp-select-flat">
+            <option value="es">1.234.567,89 — punto miles, coma decimal (Colombia)</option>
+            <option value="en">1,234,567.89 — coma miles, punto decimal (EE. UU.)</option>
+            <option value="text">Dejar como texto (no convertir a número)</option>
+          </select>
+        </div>
         <label class="checkbox checked"><span class="checkbox-box"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 6"/></svg></span>Incluir anotaciones</label>
         <label class="checkbox checked checkbox-last"><span class="checkbox-box"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 6"/></svg></span>Mantener el texto editable</label>
       </div>

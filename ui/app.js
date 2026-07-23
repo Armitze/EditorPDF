@@ -899,6 +899,8 @@ function renderModals() {
   $('#modal-export').classList.toggle('is-open', state.modal === 'export');
   $('#modal-split').classList.toggle('is-open', state.modal === 'split');
   $$('.fmt-card').forEach(c => c.classList.toggle('is-active', c.dataset.fmt === state.exportFmt));
+  // El formato de números solo tiene sentido al exportar a Excel.
+  $('#export-numfmt-row').hidden = state.exportFmt !== 'excel';
   $$('.modal-active-page').forEach(el => { el.textContent = state.activePage; });
 }
 
@@ -2038,6 +2040,7 @@ async function exportDocument() {
     const r = await api.post('/api/export', {
       fmt: state.exportFmt,
       range: $('#export-range').value,
+      numfmt: $('#export-numfmt').value,   // es | en | text (solo Excel)
     });
     if (!r.cancelled) toast('Exportado en ' + r.path);
     setState({ modal: null });

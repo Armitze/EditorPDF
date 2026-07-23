@@ -291,6 +291,7 @@ class SplitGroupsBody(BaseModel):
 class ExportBody(BaseModel):
     fmt: str
     range: str = ''
+    numfmt: str = 'es'   # es | en | text: convención de separadores para Excel
 
 
 class WindowBody(BaseModel):
@@ -312,6 +313,7 @@ class SignBody(BaseModel):
 class TableExportBody(BaseModel):
     page: int
     fmt: str  # csv | excel
+    numfmt: str = 'es'   # es | en | text
 
 
 class OcrBody(BaseModel):
@@ -341,35 +343,51 @@ def _tables_html(tables):
 _NUM_RE = re.compile(r'^-?\$?[\d.,]*\d$')
 
 
-def _xlsx_value(text):
-    """Celda para Excel: número de verdad si el texto lo es, si no el texto.
+def _xlsx_value(text, numfmt='es'):
+    """Celda para Excel según la convención de separadores elegida.
 
-    Entiende separador de miles y decimal en ambos convenios (1,234.56 y
-    1.234,56): el último . o , con uno o dos dígitos detrás es el decimal.
+    numfmt: 'es' = punto miles / coma decimal (1.234.567,89, Colombia);
+            'en' = coma miles / punto decimal (1,234,567.89, EE. UU.);
+            'text' = no convertir, dejar todo tal cual como texto.
+
+    Con la convención conocida no hay que adivinar: el separador decimal es
+    fijo y el de miles se elimina. Así "528.241.000,00" en modo 'es' da el
+    número 528241000.0 (Excel lo muestra con sus dos decimales según el
+    formato de celda) en vez de perder la coma por una heurística errónea.
     Los códigos con cero inicial ("017845") se conservan como texto.
     """
+    if numfmt == 'text':
+        return text
     t = text.strip()
     if not _NUM_RE.match(t) or t in ('-', '$'):
         return text
     s = t.lstrip('-$')
-    if s.startswith('0') and '.' not in s and ',' not in s and len(s) > 1:
-        return text                      # "017845": código, no cantidad
-    last = max(s.rfind('.'), s.rfind(','))
-    if last != -1 and 1 <= len(s) - last - 1 <= 2:
-        s = s[:last].replace('.', '').replace(',', '') + '.' + s[last + 1:]
-    else:
-        s = s.replace('.', '').replace(',', '')
+    thousands, decimal = ('.', ',') if numfmt == 'es' else (',', '.')
+    # Un solo separador de miles y nada de decimal ("017845", "1.234"): podría
+    # ser un código; si empieza por cero se respeta como texto.
+    if s.startswith('0') and decimal not in s:
+        return text
+    s = s.replace(thousands, '')
+    if decimal in s:
+        s = s.replace(decimal, '.', 1)
+    if s.count('.') > 1:                  # separadores incoherentes: no forzar
+        return text
     try:
         value = float(s)
     except ValueError:
         return text
     if t.startswith('-'):
         value = -value
-    return int(value) if value == int(value) and abs(value) < 1e15 else value
+    return value
 
 
-def _write_xlsx(target, tables):
-    """Escribe las tablas en un .xlsx real (una hoja, tablas separadas)."""
+def _write_xlsx(target, tables, numfmt='es'):
+    """Escribe las tablas en un .xlsx real (una hoja, tablas separadas).
+
+    A las celdas numéricas se les aplica un formato con dos decimales y
+    separador de miles, para que un importe como 528241000 se vea igual que
+    en el PDF (528.241.000,00 según el idioma de Excel del usuario).
+    """
     from openpyxl import Workbook
     wb = Workbook()
     ws = wb.active
@@ -380,7 +398,11 @@ def _write_xlsx(target, tables):
             ws.append([])
         first = False
         for row in t['rows']:
-            ws.append([_xlsx_value(c) for c in row])
+            values = [_xlsx_value(c, numfmt) for c in row]
+            ws.append(values)
+            for cell, v in zip(ws[ws.max_row], values):
+                if isinstance(v, float):
+                    cell.number_format = '#,##0.00'
     wb.save(target)
 
 
@@ -749,7 +771,7 @@ def create_app(manager: DocumentManager, windows: WindowService) -> FastAPI:
                                          'Libro de Excel (*.xlsx)')
             if not target:
                 return {'cancelled': True}
-            _write_xlsx(target, found)
+            _write_xlsx(target, found, body.numfmt)
         else:
             target = windows.save_dialog(f'{name}_tabla.xls', 'Excel (*.xls)')
             if not target:
@@ -809,7 +831,7 @@ def create_app(manager: DocumentManager, windows: WindowService) -> FastAPI:
                                                  'Libro de Excel (*.xlsx)')
                     if not target:
                         return {'cancelled': True}
-                    _write_xlsx(target, found)
+                    _write_xlsx(target, found, body.numfmt)
                 else:
                     target = windows.save_dialog(f'{name}.xls', 'Excel (*.xls)')
                     if not target:
