@@ -131,8 +131,21 @@ Step 'Compilando ejecutable con PyInstaller'
 # --collect-data docx: python-docx trae una plantilla default.docx que
 # PyInstaller no detecta (es dato, no codigo); sin ella la exportacion a Word
 # falla en el .exe. Debe coincidir con .github/workflows/release.yml.
+#
+# --add-data tesseract;tesseract: incluye el motor de OCR (con los idiomas
+# spa/eng) DENTRO del paquete, para que el OCR funcione en cualquier PC sin
+# instalar nada y sobreviva a las actualizaciones. ocr.py lo busca en
+# sys._MEIPASS/tesseract. La carpeta no se versiona (~166 MB, ver .gitignore);
+# si falta localmente, se compila sin OCR en vez de fallar.
+$tessArg = @()
+if (Test-Path -LiteralPath 'tesseract\tesseract.exe') {
+    $tessArg = @('--add-data', 'tesseract;tesseract')
+} else {
+    Step 'AVISO: no hay carpeta tesseract\ -> el .exe se compila SIN OCR'
+}
 & $py -m PyInstaller --noconfirm --clean --onedir --windowed `
     --name PDFEditorPro --icon assets\icon.ico --add-data "ui;ui" `
+    @tessArg `
     --collect-submodules fastapi `
     --collect-submodules starlette `
     --collect-submodules uvicorn `

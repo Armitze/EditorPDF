@@ -65,14 +65,54 @@ jobs:
       - name: Generar el icono
         run: python make_icon.py
 
+      - name: Preparar Tesseract (motor de OCR + idiomas spa/eng)
+        shell: pwsh
+        run: |
+          # La carpeta tesseract\ NO se versiona (~166 MB, ver .gitignore), así
+          # que CI no la tiene tras el checkout. Se instala Tesseract de
+          # UB-Mannheim (la misma fuente que el README) y se copia a una carpeta
+          # local tesseract\ con solo lo necesario, para que PyInstaller la
+          # empaquete DENTRO del .exe (ocr.py la busca en sys._MEIPASS/tesseract).
+          # Así el OCR funciona en cualquier PC y sobrevive a las actualizaciones.
+          $ErrorActionPreference = 'Stop'
+          choco install tesseract --params "/InstallDir:C:\Tesseract-OCR" -y --no-progress
+          $src = 'C:\Tesseract-OCR'
+          if (-not (Test-Path -LiteralPath "$src\tesseract.exe")) {
+            # Ruta por defecto del paquete de choco, por si -InstallDir no aplicó.
+            $src = 'C:\Program Files\Tesseract-OCR'
+          }
+          if (-not (Test-Path -LiteralPath "$src\tesseract.exe")) {
+            throw "No se encontró tesseract.exe tras la instalación (buscado en $src)."
+          }
+          # Descargar el modelo de español (choco solo trae inglés + osd).
+          $spa = Join-Path $src 'tessdata\spa.traineddata'
+          if (-not (Test-Path -LiteralPath $spa)) {
+            Invoke-WebRequest -Uri 'https://github.com/tesseract-ocr/tessdata_fast/raw/main/spa.traineddata' -OutFile $spa
+          }
+          # Copiar SOLO el ejecutable, sus DLL y los modelos spa/eng al paquete.
+          # (Se omiten las decenas de .exe de entrenamiento y la doc: no hacen
+          # falta en runtime y abultarían el .zip de actualización.)
+          New-Item -ItemType Directory -Force -Path 'tesseract\tessdata' | Out-Null
+          Copy-Item -LiteralPath "$src\tesseract.exe" -Destination 'tesseract\' -Force
+          Copy-Item -Path "$src\*.dll" -Destination 'tesseract\' -Force
+          foreach ($lang in @('spa','eng','osd')) {
+            $td = Join-Path $src "tessdata\$lang.traineddata"
+            if (Test-Path -LiteralPath $td) { Copy-Item -LiteralPath $td -Destination 'tesseract\tessdata\' -Force }
+          }
+          $langs = (Get-ChildItem 'tesseract\tessdata\*.traineddata' | ForEach-Object { $_.BaseName }) -join ', '
+          Write-Host "Tesseract preparado. Idiomas: $langs"
+
       - name: Compilar con PyInstaller
         run: |
           # --collect-data docx: python-docx trae una plantilla default.docx que
           # PyInstaller no detecta (es dato, no código); sin ella la exportación
           # a Word falla en el .exe. --hidden-import docx por si el análisis
           # estático no ve el import (es perezoso dentro de exportword/pdfcore).
+          # --add-data tesseract: incluye el motor de OCR (spa/eng) DENTRO del
+          # paquete (ver paso anterior). Debe coincidir con build.ps1.
           python -m PyInstaller --noconfirm --clean --onedir --windowed `
             --name PDFEditorPro --icon assets\icon.ico --add-data "ui;ui" `
+            --add-data "tesseract;tesseract" `
             --collect-submodules fastapi `
             --collect-submodules starlette `
             --collect-submodules uvicorn `
