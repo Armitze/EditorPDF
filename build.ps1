@@ -145,7 +145,9 @@ if (Test-Path -LiteralPath 'tesseract\tesseract.exe') {
 } else {
     Step 'AVISO: no hay carpeta tesseract\ -> el .exe se compila SIN OCR'
 }
-& $py -m PyInstaller --noconfirm --clean --onedir --windowed `
+# --noupx: los ejecutables comprimidos con UPX disparan heuristicas antivirus
+# (Avast CyberCapture llego a bloquear la app); mejor sin comprimir.
+& $py -m PyInstaller --noconfirm --clean --onedir --windowed --noupx `
     --name PDFEditorPro --icon assets\icon.ico --add-data "ui;ui" `
     @tessArg `
     --collect-submodules fastapi `

@@ -110,7 +110,10 @@ jobs:
           # estático no ve el import (es perezoso dentro de exportword/pdfcore).
           # --add-data tesseract: incluye el motor de OCR (spa/eng) DENTRO del
           # paquete (ver paso anterior). Debe coincidir con build.ps1.
-          python -m PyInstaller --noconfirm --clean --onedir --windowed `
+          # --noupx: los runners de GitHub traen UPX y PyInstaller lo usaria
+          # solo; los binarios comprimidos con UPX disparan los antivirus
+          # (Avast CyberCapture bloqueaba la app en PCs ajenos).
+          python -m PyInstaller --noconfirm --clean --onedir --windowed --noupx `
             --name PDFEditorPro --icon assets\icon.ico --add-data "ui;ui" `
             --add-data "tesseract;tesseract" `
             --collect-submodules fastapi `
