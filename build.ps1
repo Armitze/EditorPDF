@@ -79,6 +79,8 @@ $required = @{
     fitz        = 'PyMuPDF'
     PIL         = 'Pillow'
     docx        = 'python-docx'
+    numpy       = 'numpy'
+    openpyxl    = 'openpyxl'
     PyInstaller = 'pyinstaller'
 }
 # find_spec devuelve None en vez de lanzar excepcion, asi no escribe en stderr
@@ -152,6 +154,9 @@ if (Test-Path -LiteralPath 'tesseract\tesseract.exe') {
     --collect-submodules webview `
     --collect-data docx `
     --hidden-import docx `
+    --hidden-import scantables `
+    --hidden-import numpy `
+    --hidden-import openpyxl `
     main.py
 if ($LASTEXITCODE -ne 0) { throw 'Fallo la compilacion con PyInstaller.' }
 

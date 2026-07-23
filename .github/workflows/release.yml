@@ -119,6 +119,9 @@ jobs:
             --collect-submodules webview `
             --collect-data docx `
             --hidden-import docx `
+            --hidden-import scantables `
+            --hidden-import numpy `
+            --hidden-import openpyxl `
             main.py
         shell: pwsh
 

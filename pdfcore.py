@@ -745,9 +745,13 @@ class PdfState:
                 # En un escaneo con capa OCR no hay líneas vectoriales que
                 # delimiten la tabla (los bordes son píxeles de la imagen):
                 # se detectan las líneas en la propia imagen y se rellenan las
-                # celdas con las palabras del OCR.
-                import scantables
-                out = scantables.page_tables(page)
+                # celdas con las palabras del OCR. Si numpy no está en el
+                # paquete se sigue con el último recurso en vez de fallar.
+                try:
+                    import scantables
+                    out = scantables.page_tables(page)
+                except ImportError:
+                    pass
             if not out:
                 # Último recurso: deducir la tabla por la alineación del texto.
                 out = self._extract_tables(page.find_tables(strategy='text'))
