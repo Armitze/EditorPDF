@@ -423,9 +423,21 @@ class PdfState:
                 if a.type[0] not in movable:
                     continue
                 r = a.rect
-                out.append({'xref': a.xref, 'kind': a.type[1],
-                            'rect': [r.x0, r.y0, r.x1, r.y1]})
+                out.append({
+                    'xref': a.xref, 'kind': a.type[1],
+                    'rect': [r.x0, r.y0, r.x1, r.y1],
+                    # Solo el texto libre es editable; el resto no lleva texto.
+                    'editable': a.type[0] == fitz.PDF_ANNOT_FREE_TEXT,
+                    'text': a.info.get('content', ''),
+                })
             return out
+
+    @staticmethod
+    def _find_annot(page, xref):
+        for a in page.annots():
+            if a.xref == xref:
+                return a
+        raise ValueError('La anotación ya no existe.')
 
     def move_annot(self, index, xref, dx, dy):
         """Desplaza la anotación `xref` de la página `index` en (dx, dy) puntos.
@@ -436,18 +448,41 @@ class PdfState:
         """
         with self._lock:
             page = self._require()[index]
-            target = None
-            for a in page.annots():
-                if a.xref == xref:
-                    target = a
-                    break
-            if target is None:
-                raise ValueError('La anotación ya no existe.')
+            target = self._find_annot(page, xref)
             self._snapshot()
             r = target.rect
             new = fitz.Rect(r.x0 + dx, r.y0 + dy, r.x1 + dx, r.y1 + dy)
             target.set_rect(new)
             target.update()
+            self.dirty = True
+            self.rev += 1
+            return self.info()
+
+    def edit_annot(self, index, xref, text):
+        """Reemplaza el texto de la anotación de texto libre `xref`.
+
+        Conserva posición, color y tamaño de fuente; solo cambia el contenido.
+        El recuadro se ensancha si el texto nuevo no cabría (una línea alta).
+        """
+        with self._lock:
+            page = self._require()[index]
+            target = self._find_annot(page, xref)
+            if target.type[0] != fitz.PDF_ANNOT_FREE_TEXT:
+                raise ValueError('Esa anotación no es un texto editable.')
+            self._snapshot()
+            target.set_info(content=text)
+            target.update()
+            self.dirty = True
+            self.rev += 1
+            return self.info()
+
+    def delete_annot(self, index, xref):
+        """Elimina la anotación `xref` de la página `index`."""
+        with self._lock:
+            page = self._require()[index]
+            target = self._find_annot(page, xref)
+            self._snapshot()
+            page.delete_annot(target)
             self.dirty = True
             self.rev += 1
             return self.info()

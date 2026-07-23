@@ -317,6 +317,17 @@ class MoveAnnotBody(BaseModel):
     dy: float
 
 
+class EditAnnotBody(BaseModel):
+    page: int
+    xref: int
+    text: str
+
+
+class DeleteAnnotBody(BaseModel):
+    page: int
+    xref: int
+
+
 class TableExportBody(BaseModel):
     page: int
     fmt: str  # csv | excel
@@ -593,6 +604,20 @@ def create_app(manager: DocumentManager, windows: WindowService) -> FastAPI:
     def move_annot(body: MoveAnnotBody, pdf: PdfState = Depends(get_doc)):
         try:
             return pdf.move_annot(body.page, body.xref, body.dx, body.dy)
+        except Exception as e:
+            raise HTTPException(400, str(e))
+
+    @app.post('/api/annot/edit')
+    def edit_annot(body: EditAnnotBody, pdf: PdfState = Depends(get_doc)):
+        try:
+            return pdf.edit_annot(body.page, body.xref, body.text)
+        except Exception as e:
+            raise HTTPException(400, str(e))
+
+    @app.post('/api/annot/delete')
+    def delete_annot(body: DeleteAnnotBody, pdf: PdfState = Depends(get_doc)):
+        try:
+            return pdf.delete_annot(body.page, body.xref)
         except Exception as e:
             raise HTTPException(400, str(e))
 

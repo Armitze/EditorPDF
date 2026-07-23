@@ -427,6 +427,9 @@ a{color:#2563a8}a:hover{color:#1d5290}
   border-color:rgba(37,99,168,.55)}
 .annot-handle.is-dragging{background:rgba(37,99,168,.16);
   border:1px dashed #2563a8;border-radius:3px}
+/* Anotación seleccionada (lista para borrar con Supr): marco sólido. */
+.annot-handle.is-selected{background:rgba(37,99,168,.10);
+  border:1.5px solid #2563a8;border-radius:3px}
 /* Al arrastrar, dejar que el handle se vea aunque salga del borde de la hoja. */
 .pp-annot:has(.annot-handle.is-dragging){overflow:visible}
 

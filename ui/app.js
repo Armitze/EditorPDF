@@ -1808,8 +1808,10 @@ function initDrawing() {
       Object.assign(input.style, {
         left: Math.min(draw.x0, draw.x1) + 'px',
         top: Math.min(draw.y0, draw.y1) + 'px',
+        width: '',   // ancho por defecto (una edición previa pudo fijarlo)
       });
       input.value = '';
+      input.dataset.editXref = '';   // modo crear, no editar
       input.hidden = false;
       input.focus();
       return;
@@ -1820,14 +1822,26 @@ function initDrawing() {
   input.addEventListener('keydown', async e => {
     if (e.key === 'Enter') {
       const text = input.value.trim();
+      const editXref = input.dataset.editXref;
       input.hidden = true;
-      if (text) await commitAnnot(text);
+      input.dataset.editXref = '';
+      if (editXref) {
+        // Editar una anotación existente. Texto vacío = se elimina.
+        if (text) await commitAnnotEdit(editXref, input.dataset.editPage, text);
+        else await deleteAnnotHandle({ dataset: { xref: editXref, page: input.dataset.editPage } });
+      } else if (text) {
+        await commitAnnot(text);
+      }
     } else if (e.key === 'Escape') {
       input.hidden = true;
+      input.dataset.editXref = '';
     }
     e.stopPropagation();
   });
-  input.addEventListener('blur', () => { input.hidden = true; });
+  input.addEventListener('blur', () => {
+    input.hidden = true;
+    input.dataset.editXref = '';
+  });
 }
 
 /* ===== Mover anotaciones con el puntero ===== */
@@ -1870,6 +1884,11 @@ async function loadAnnotHandles(el, index, key) {
     h.style.height = Math.max(8, (y1 - y0) * f) + 'px';
     h.dataset.xref = a.xref;
     h.dataset.page = index;
+    h.dataset.editable = a.editable ? '1' : '';
+    h.dataset.text = a.text || '';
+    h.title = a.editable
+      ? 'Arrastra para mover · doble clic para editar · Supr para borrar'
+      : 'Arrastra para mover · Supr para borrar';
     layer.appendChild(h);
   }
 }
@@ -1887,15 +1906,62 @@ function refreshAnnotHandles() {
   }
 }
 
+// Marca un handle como seleccionado (para borrarlo con Supr). Solo uno a la vez.
+function selectAnnotHandle(handle) {
+  $$('.annot-handle.is-selected').forEach(h => h.classList.remove('is-selected'));
+  if (handle) handle.classList.add('is-selected');
+}
+
+// Abre el input de texto sobre un handle para editar su contenido.
+function editAnnotHandle(handle) {
+  const layer = handle.closest('.pp-annot');
+  const input = $('#annot-text-input');
+  layer.appendChild(input);
+  Object.assign(input.style, {
+    left: handle.style.left,
+    top: handle.style.top,
+    width: Math.max(170, parseFloat(handle.style.width) + 20) + 'px',
+  });
+  input.value = handle.dataset.text || '';
+  input.hidden = false;
+  input.dataset.editXref = handle.dataset.xref;
+  input.dataset.editPage = handle.dataset.page;
+  input.focus();
+  input.select();
+}
+
+async function commitAnnotEdit(xref, page, text) {
+  try {
+    const info = await api.post('/api/annot/edit', { page: Number(page), xref: Number(xref), text });
+    await applyDoc(info);
+  } catch (err) {
+    toast('No se pudo editar: ' + err.message);
+  }
+}
+
+async function deleteAnnotHandle(handle) {
+  try {
+    const info = await api.post('/api/annot/delete', {
+      page: Number(handle.dataset.page),
+      xref: Number(handle.dataset.xref),
+    });
+    await applyDoc(info);
+    toast('Anotación eliminada');
+  } catch (err) {
+    toast('No se pudo eliminar: ' + err.message);
+  }
+}
+
 function initAnnotDrag() {
   const rd = $('#real-doc');
 
   rd.addEventListener('pointerdown', e => {
     if (state.tool !== 'select') return;
     const handle = e.target.closest('.annot-handle');
-    if (!handle) return;
+    if (!handle) { selectAnnotHandle(null); return; }
     e.preventDefault();
     e.stopPropagation();
+    selectAnnotHandle(handle);
     const layer = handle.closest('.pp-annot');
     const rect = layer.getBoundingClientRect();
     const zf = (rect.width || PAGE_DISPLAY_WIDTH) / PAGE_DISPLAY_WIDTH;
@@ -1908,6 +1974,16 @@ function initAnnotDrag() {
     annotDrag.baseTop = parseFloat(handle.style.top);
     handle.classList.add('is-dragging');
     handle.setPointerCapture(e.pointerId);
+  });
+
+  // Doble clic sobre un texto editable: abrir el input para cambiar su texto.
+  rd.addEventListener('dblclick', e => {
+    if (state.tool !== 'select') return;
+    const handle = e.target.closest('.annot-handle');
+    if (!handle || !handle.dataset.editable) return;
+    e.preventDefault();
+    e.stopPropagation();
+    editAnnotHandle(handle);
   });
 
   rd.addEventListener('pointermove', e => {
@@ -2671,6 +2747,16 @@ function init() {
       e.preventDefault();
       rotatePage(e.key.toLowerCase() === 'l' ? 'left' : 'right', e.altKey);
       return;
+    }
+    // Supr/Del: borrar la anotación seleccionada (con el puntero).
+    if (!typing && (e.key === 'Delete' || e.key === 'Backspace')
+        && state.tool === 'select') {
+      const sel = $('.annot-handle.is-selected');
+      if (sel) {
+        e.preventDefault();
+        deleteAnnotHandle(sel);
+        return;
+      }
     }
     if (previewOpen()) {
       if (e.key === 'Escape') closePagePreview();
