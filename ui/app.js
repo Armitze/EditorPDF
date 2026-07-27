@@ -2394,6 +2394,57 @@ function exportDemoDocument() {
   setState({ modal: null });
 }
 
+/* ===== Imprimir ===== */
+// Imprime el PDF con el diálogo nativo del sistema (elegir impresora, rango,
+// copias…). Se monta un iframe oculto con cada página renderizada a alta
+// resolución y se lanza print() sobre él: así lo que se imprime es el
+// documento, no la interfaz. El @page toma el tamaño real de la página 1 para
+// que «tamaño real» cuadre en papel.
+let printFrame = null;
+
+async function printDocument() {
+  if (!inDoc()) { toast('Abre un PDF para imprimir'); return; }
+  const t = activeTab();
+  const count = t.doc.count;
+  if (printFrame) printFrame.remove();   // una impresión anterior sin cerrar
+  toast('Preparando impresión…');
+
+  const frame = document.createElement('iframe');
+  printFrame = frame;
+  frame.style.cssText = 'position:fixed;right:0;bottom:0;width:1px;height:1px;border:0;visibility:hidden';
+  document.body.appendChild(frame);
+
+  const sz = (t.pageSizes && t.pageSizes[0]) || { width: 612, height: 792 };
+  const fdoc = frame.contentDocument;
+  fdoc.open();
+  fdoc.write(
+    '<!DOCTYPE html><html><head><meta charset="utf-8"><style>' +
+    `@page{size:${sz.width}pt ${sz.height}pt;margin:0}` +
+    'html,body{margin:0;padding:0}' +
+    'img{display:block;width:100%;height:auto;break-inside:avoid;page-break-after:always}' +
+    'img:last-child{page-break-after:auto}' +
+    '</style></head><body></body></html>');
+  fdoc.close();
+
+  // Cargar todas las páginas a ~180 dpi antes de abrir el diálogo.
+  const loads = [];
+  for (let i = 0; i < count; i++) {
+    const img = fdoc.createElement('img');
+    img.src = imgUrl(`/api/page/${i}?r=${state.doc.rev}&scale=2.5`);
+    loads.push(new Promise(res => { img.onload = img.onerror = res; }));
+    fdoc.body.appendChild(img);
+  }
+  await Promise.all(loads);
+  if (frame !== printFrame || !frame.isConnected) return;   // se relanzó/cerró
+
+  frame.contentWindow.onafterprint = () => {
+    if (frame === printFrame) printFrame = null;
+    frame.remove();
+  };
+  frame.contentWindow.focus();
+  frame.contentWindow.print();
+}
+
 async function exportDocument() {
   if (!inDoc()) { exportDemoDocument(); return; }
   try {
@@ -2617,6 +2668,7 @@ function init() {
   // Toolbar
   $('#btn-open').addEventListener('click', openPdf);
   $('#btn-save').addEventListener('click', () => saveDoc(false));
+  $('#btn-print').addEventListener('click', printDocument);
   $('#btn-split').addEventListener('click', openSplitModal);
   $('#btn-add-group').addEventListener('click', addSplitGroup);
   $('#btn-split-run').addEventListener('click', runSplitGroups);
@@ -2886,6 +2938,13 @@ function init() {
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
       e.preventDefault();
       saveDoc(e.shiftKey);
+      return;
+    }
+    // Ctrl+P: imprimir el documento (no la interfaz, que es lo que haría el
+    // print() por defecto del navegador).
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'p') {
+      e.preventDefault();
+      printDocument();
       return;
     }
     if ((e.ctrlKey || e.metaKey) && !typing && e.key.toLowerCase() === 'z') {
