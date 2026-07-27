@@ -273,6 +273,7 @@ class PagesBody(BaseModel):
     action: str
     page: int
     scope: str = 'pg'   # pg = solo la página indicada | doc = todo el documento
+    to: int = 0         # destino 0-based (solo para action='move')
 
 
 class SaveBody(BaseModel):
@@ -644,6 +645,8 @@ def create_app(manager: DocumentManager, windows: WindowService) -> FastAPI:
                 return pdf.duplicate_page(body.page)
             if body.action == 'delete':
                 return pdf.delete_page(body.page)
+            if body.action == 'move':
+                return pdf.move_page(body.page, body.to)
             # Girar: `scope='doc'` gira todo el documento; si no, la página dada.
             if body.action in ('rotate-left', 'rotate-right'):
                 delta = -90 if body.action == 'rotate-left' else 90

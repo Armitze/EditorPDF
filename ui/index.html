@@ -127,6 +127,27 @@
       </div>
     </aside>
 
+    <!-- Menú contextual de las miniaturas (clic derecho sobre una página). -->
+    <div class="ctx-menu ctx-page-menu" id="ctx-page">
+      <div class="ctx-item" data-pgact="duplicate">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>
+        Duplicar página
+      </div>
+      <div class="ctx-item" data-pgact="rotate-right">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8a9 9 0 1 0 2 6"/><path d="M21 3v5h-5"/></svg>
+        Girar a la derecha
+      </div>
+      <div class="ctx-item" data-pgact="rotate-left">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8a9 9 0 1 1-2 6"/><path d="M3 3v5h5"/></svg>
+        Girar a la izquierda
+      </div>
+      <div class="ctx-divider"></div>
+      <div class="ctx-item ctx-danger" data-pgact="delete">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12"/></svg>
+        Eliminar página
+      </div>
+    </div>
+
     <!-- CANVAS -->
     <main class="canvas-wrap">
       <div class="canvas-scroll" id="canvas-scroll">

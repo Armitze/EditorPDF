@@ -2022,6 +2022,163 @@ function initAnnotDrag() {
   });
 }
 
+/* ===== Organizar páginas (estilo Adobe) ===== */
+// Arrastrar una miniatura reordena las páginas; clic derecho abre un menú con
+// duplicar / girar / eliminar la página señalada (no la activa).
+function initPageOrganizer() {
+  const list = $('#page-list');
+  const menu = $('#ctx-page');
+  const pdrag = { active: false, started: false, from: -1, item: null };
+  let dropLine = null;
+  let swallowClick = false;   // un arrastre no debe contar como clic
+  let ctxPage = -1;
+
+  const itemsOf = () => [...list.querySelectorAll('.page-item')];
+
+  function ensureDropLine() {
+    // renderPages() vacía la lista en cada render: recrear si quedó huérfana.
+    if (!dropLine || !dropLine.isConnected) {
+      dropLine = document.createElement('div');
+      dropLine.className = 'page-drop-line';
+      dropLine.hidden = true;
+      list.appendChild(dropLine);
+    }
+    return dropLine;
+  }
+
+  // Índice de inserción (0..count) según la Y del puntero.
+  function insertionAt(clientY) {
+    const items = itemsOf();
+    for (let k = 0; k < items.length; k++) {
+      const r = items[k].getBoundingClientRect();
+      if (clientY < r.top + r.height / 2) return k;
+    }
+    return items.length;
+  }
+
+  function updateDropLine(clientY) {
+    const items = itemsOf();
+    if (!items.length) return;
+    const ins = insertionAt(clientY);
+    const line = ensureDropLine();
+    const listR = list.getBoundingClientRect();
+    const edgeY = ins < items.length
+      ? items[ins].getBoundingClientRect().top
+      : items[items.length - 1].getBoundingClientRect().bottom;
+    line.style.top = (edgeY - listR.top + list.scrollTop - 1) + 'px';
+    line.hidden = false;
+    // Auto-desplazar la lista al acercarse a los bordes (como Adobe).
+    if (clientY < listR.top + 30) list.scrollTop -= 9;
+    else if (clientY > listR.bottom - 30) list.scrollTop += 9;
+  }
+
+  function resetDrag() {
+    if (pdrag.item) pdrag.item.classList.remove('is-drag-page');
+    pdrag.active = pdrag.started = false;
+    if (dropLine) dropLine.hidden = true;
+  }
+
+  list.addEventListener('pointerdown', e => {
+    if (e.button !== 0 || e.pointerType === 'touch') return;
+    const item = e.target.closest('.page-item');
+    if (!item) return;
+    pdrag.active = true;
+    pdrag.started = false;
+    pdrag.item = item;
+    pdrag.from = Number(item.dataset.page) - 1;
+    pdrag.startY = e.clientY;
+    pdrag.pointerId = e.pointerId;
+  });
+
+  list.addEventListener('pointermove', e => {
+    if (!pdrag.active) return;
+    if (!pdrag.started) {
+      if (Math.abs(e.clientY - pdrag.startY) < 6) return;   // aún es un clic
+      pdrag.started = true;
+      pdrag.item.classList.add('is-drag-page');
+      try { list.setPointerCapture(pdrag.pointerId); } catch {}
+    }
+    updateDropLine(e.clientY);
+  });
+
+  list.addEventListener('pointerup', async e => {
+    if (!pdrag.active) return;
+    const started = pdrag.started;
+    const from = pdrag.from;
+    resetDrag();
+    if (!started) return;               // clic normal: cambia de página como siempre
+    swallowClick = true;
+    const ins = insertionAt(e.clientY);
+    const to = ins > from ? ins - 1 : ins;   // índice de inserción -> posición final
+    if (to === from) return;
+    if (inDoc()) {
+      try {
+        const info = await api.post('/api/pages', { action: 'move', page: from, to });
+        await applyDoc(info);
+        changePage(to + 1);
+        toast(`Página ${from + 1} movida a la posición ${to + 1}`);
+      } catch (err) {
+        toast('No se pudo mover la página: ' + err.message);
+      }
+    } else {
+      demoSnapshot();
+      const p = state.pages.splice(from, 1)[0];
+      state.pages.splice(to, 0, p);
+      setState({ activePage: to + 1 });
+    }
+  });
+
+  list.addEventListener('pointercancel', resetDrag);
+
+  // En fase de captura: si acaba de terminar un arrastre, el clic que Windows
+  // dispara al soltar no debe llegar al handler de cambiar de página.
+  list.addEventListener('click', e => {
+    if (swallowClick) {
+      swallowClick = false;
+      e.stopPropagation();
+      e.preventDefault();
+    }
+  }, true);
+
+  // --- Menú contextual sobre una miniatura ---
+  list.addEventListener('contextmenu', e => {
+    const item = e.target.closest('.page-item');
+    if (!item || !inDoc()) return;
+    e.preventDefault();
+    ctxPage = Number(item.dataset.page) - 1;
+    menu.classList.add('is-open');
+    // Posicionar en el cursor sin salirse de la ventana (medir ya visible).
+    menu.style.left = Math.min(e.clientX, window.innerWidth - menu.offsetWidth - 8) + 'px';
+    menu.style.top = Math.min(e.clientY, window.innerHeight - menu.offsetHeight - 8) + 'px';
+  });
+
+  document.addEventListener('click', () => menu.classList.remove('is-open'));
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') menu.classList.remove('is-open');
+  });
+
+  menu.addEventListener('click', async e => {
+    e.stopPropagation();
+    const act = e.target.closest('[data-pgact]');
+    if (!act) return;
+    menu.classList.remove('is-open');
+    const action = act.dataset.pgact;
+    const page = ctxPage;
+    try {
+      const info = await api.post('/api/pages', { action, page });
+      await applyDoc(info);
+      if (action === 'delete') {
+        changePage(Math.min(state.activePage, info.count));
+        toast(`Página ${page + 1} eliminada`);
+      } else if (action === 'duplicate') {
+        changePage(page + 2);
+      }
+    } catch (err) {
+      toast(err.message);
+    }
+  });
+}
+
 /* ===== Capa de texto seleccionable + resaltado de texto (estilo Adobe) ===== */
 
 // Carga las palabras de la página `index` en la capa de texto de SU hoja.
@@ -2778,6 +2935,7 @@ function init() {
 
   initDrawing();
   initAnnotDrag();
+  initPageOrganizer();
   initTextSelection();
   render();
 

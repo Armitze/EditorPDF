@@ -538,6 +538,27 @@ class PdfState:
             self.rev += 1
             return self.info()
 
+    def move_page(self, index, to):
+        """Mueve la página `index` para que quede en la posición `to` (0-based).
+
+        El `move_page` de PyMuPDF inserta DELANTE de la página que ocupa `to`
+        antes de borrar la original, así que al mover hacia delante hay que
+        apuntar una posición más allá para que el resultado final sea `to`.
+        """
+        with self._lock:
+            doc = self._require()
+            count = doc.page_count
+            if not (0 <= index < count and 0 <= to < count):
+                raise ValueError('Posición de página fuera de rango.')
+            if index == to:
+                return self.info()
+            self._snapshot()
+            doc.move_page(index, -1 if to == count - 1 and to > index
+                          else (to + 1 if to > index else to))
+            self.dirty = True
+            self.rev += 1
+            return self.info()
+
     # ---------- guardar ----------
     def save(self, path=None):
         with self._lock:
