@@ -32,6 +32,7 @@ const state = {
   extractedTable: null,    // filas reales extraídas del PDF
   ocrDone: false,
   ocrScope: 'doc',         // doc | pg | sel
+  enhScope: 'doc',         // mejora de resolución: doc | pg
   exportFmt: 'word',       // word | excel | html
   annotColor: '#f2d024',
   signImage: null,         // data URL del PNG de firma importado (modo firmar)
@@ -902,11 +903,13 @@ function renderRightPanel() {
   // OCR
   $('#ocr-result').hidden = !state.ocrDone;
   $('#ocr-pending').hidden = state.ocrDone;
-  $$('.scope-card').forEach(c => c.classList.toggle('is-active', c.dataset.scope === state.ocrScope));
+  $$('.scope-card:not(.enh-scope)').forEach(c => c.classList.toggle('is-active', c.dataset.scope === state.ocrScope));
 }
 
 function renderModals() {
   $('#modal-ocr').classList.toggle('is-open', state.modal === 'ocr');
+  $('#modal-enhance').classList.toggle('is-open', state.modal === 'enhance');
+  $$('.enh-scope').forEach(c => c.classList.toggle('is-active', c.dataset.scope === state.enhScope));
   $('#modal-export').classList.toggle('is-open', state.modal === 'export');
   $('#modal-split').classList.toggle('is-open', state.modal === 'split');
   $$('.fmt-card').forEach(c => c.classList.toggle('is-active', c.dataset.fmt === state.exportFmt));
@@ -1454,6 +1457,37 @@ async function rotatePage(dir, whole = false) {
     toast(whole ? 'Documento girado' : `Página ${state.activePage} girada`);
   } catch (e) {
     toast('No se pudo girar: ' + e.message);
+  }
+}
+
+/* ===== Mejorar resolución (escaneos borrosos) ===== */
+
+// Pide al backend re-rasterizar a 300 dpi con realce de nitidez. Puede tardar
+// unos segundos en documentos largos: el botón se bloquea y avisa mientras.
+async function runEnhance() {
+  if (!inDoc()) { toast('Abre un PDF para mejorar su resolución'); return; }
+  const btn = $('#btn-enhance-run');
+  const label = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Mejorando…';
+  try {
+    const r = await api.post('/api/enhance', {
+      scope: state.enhScope,
+      page: state.activePage - 1,
+      level: $('#enh-level').value,
+    });
+    if (!r.enhanced) {
+      toast('No se detectaron páginas escaneadas · usa «Solo página actual» para forzar una página');
+      return;
+    }
+    await applyDoc(r);
+    setState({ modal: null });
+    toast(`Resolución mejorada en ${r.enhanced} ${r.enhanced === 1 ? 'página' : 'páginas'}`);
+  } catch (e) {
+    toast('No se pudo mejorar la resolución: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = label;
   }
 }
 
@@ -2700,6 +2734,10 @@ function init() {
   $('#merge-current').addEventListener('click', () => runMerge('current'));
   $('#merge-new').addEventListener('click', () => runMerge('new'));
   $('#btn-ocr-modal').addEventListener('click', () => setState({ modal: 'ocr', ctx: null }));
+  $('#btn-enhance-modal').addEventListener('click', () => {
+    if (!inDoc()) { toast('Abre un PDF para mejorar su resolución'); return; }
+    setState({ modal: 'enhance', ctx: null });
+  });
   $('#btn-export-modal').addEventListener('click', () => setState({ modal: 'export', ctx: null }));
 
   // Quitar la contraseña: guarda una copia sin cifrar (pregunta dónde).
@@ -2918,10 +2956,14 @@ function init() {
   });
 
   // OCR (pestaña y modal comparten alcance)
-  $$('.scope-card').forEach(c => c.addEventListener('click', () => setState({ ocrScope: c.dataset.scope })));
+  $$('.scope-card:not(.enh-scope)').forEach(c => c.addEventListener('click', () => setState({ ocrScope: c.dataset.scope })));
   $('#btn-ocr-run').addEventListener('click', () => runOcr(false));
   $('#btn-ocr-run-modal').addEventListener('click', () => runOcr(true));
   $('#btn-ocr-insert').addEventListener('click', () => toast('Texto insertado en el documento'));
+
+  // Mejorar resolución
+  $$('.enh-scope').forEach(c => c.addEventListener('click', () => setState({ enhScope: c.dataset.scope })));
+  $('#btn-enhance-run').addEventListener('click', runEnhance);
 
   // Modales
   $$('.overlay').forEach(ov => {

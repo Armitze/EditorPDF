@@ -13,6 +13,19 @@ import renderpool
 THUMB_WIDTH = 176
 PAGE_RENDER_SCALE = 2.0
 MAX_UNDO = 20
+
+# Mejora de resolución: parámetros del re-rasterizado de escaneos borrosos.
+ENHANCE_DPI = 300         # resolución objetivo (la de un escaneo de calidad)
+ENHANCE_MAX_SIDE = 4500   # tope de píxeles del lado mayor (memoria y tamaño)
+# Niveles de realce: (gamma, radio USM, porcentaje USM, umbral USM). La gamma
+# > 1 oscurece los tonos medios (da cuerpo al texto desvaído); la máscara de
+# enfoque es deliberadamente suave: el enfoque fuerte sobre un reescalado crea
+# halos alrededor de las letras y «daña» la imagen en vez de mejorarla.
+ENHANCE_LEVELS = {
+    'soft': (1.0, 1.0, 70, 2),
+    'medium': (1.15, 1.1, 90, 2),
+    'strong': (1.25, 1.2, 110, 2),
+}
 _INVALID_FILENAME = '<>:"/\\|?*'
 
 # Identificador único de cada PdfState para las claves de caché de los workers
@@ -849,6 +862,128 @@ class PdfState:
             info = self.info()
             info['ocrPages'] = len(targets)
             info['lang'] = lang
+            return info
+
+    # ---------- mejora de resolución (escaneos borrosos) ----------
+    @staticmethod
+    def _page_is_scan(page, min_coverage=0.5):
+        """True si la página es esencialmente una imagen (escaneo o foto).
+
+        Se mide cuánta superficie de la página cubren sus imágenes. Un
+        documento digital con un logo no llega al umbral; un escaneo (aunque
+        tenga capa OCR encima) sí.
+        """
+        area = abs(page.rect)
+        if not area:
+            return False
+        covered = 0.0
+        for img in page.get_images(full=True):
+            try:
+                covered += sum(abs(r) for r in page.get_image_rects(img[0]))
+            except Exception:
+                continue
+        return covered >= area * min_coverage
+
+    @staticmethod
+    def _page_native_scale(page):
+        """Factor de render que reproduce la página a la resolución NATIVA de
+        su imagen más detallada (px de imagen por punto de página).
+
+        Renderizar a la escala nativa evita que MuPDF interpole: los píxeles
+        del render son los píxeles reales del escaneo, y el reescalado fino lo
+        hacemos después con Lanczos (mucho mejor). Sin imágenes devuelve None.
+        """
+        best = 0.0
+        for img in page.get_images(full=True):
+            try:
+                rects = page.get_image_rects(img[0])
+            except Exception:
+                continue
+            for r in rects:
+                if r.width > 1:
+                    best = max(best, img[2] / r.width)   # img[2] = ancho en px
+        return best or None
+
+    def enhance_pages(self, index=None, level='medium', dpi=ENHANCE_DPI,
+                      force=False):
+        """Mejora páginas escaneadas borrosas re-muestreándolas con cuidado.
+
+        Cadena de procesado (elegida comparando métodos sobre escaneos reales;
+        el enfoque agresivo + JPEG de la primera versión creaba halos y ruido):
+
+        1. Render a la resolución NATIVA de la imagen incrustada (sin dejar
+           que MuPDF invente píxeles interpolando).
+        2. Reescalado a ~`dpi` con Lanczos, el filtro de re-muestreo que mejor
+           conserva los bordes de las letras.
+        3. Punto blanco: el fondo gris del escaneo se estira a blanco puro
+           (percentil 97 por canal), sin desplazar los colores.
+        4. Gamma > 1 según el nivel: da cuerpo al texto desvaído.
+        5. Máscara de enfoque SUAVE (el «des-borroso» final, sin halos).
+        6. Salida PNG sin pérdida: nada de artefactos JPEG sobre el texto.
+
+        `index` None = todo el documento. Por defecto solo se tocan las
+        páginas que parecen escaneadas: una página con texto digital perdería
+        su texto seleccionable al convertirse en imagen. Con `force=True` se
+        mejora también esa página (el usuario la eligió a propósito).
+
+        La página mejorada pierde la capa OCR si la tenía (vuelve a ser solo
+        imagen); basta con reaplicar el OCR después.
+        """
+        import numpy as np
+        from PIL import Image, ImageFilter
+        if level not in ENHANCE_LEVELS:
+            raise ValueError(f'Nivel de mejora desconocido: {level}')
+        gamma, radius, percent, threshold = ENHANCE_LEVELS[level]
+        with self._lock:
+            doc = self._require()
+            idxs = list(range(doc.page_count)) if index is None else [index]
+            targets = idxs if force else [i for i in idxs
+                                          if self._page_is_scan(doc[i])]
+            if not targets:
+                info = self.info()
+                info['enhanced'] = 0
+                return info
+            self._snapshot()
+            for i in targets:
+                page = doc[i]
+                rect = page.rect
+                side = max(rect.width, rect.height)
+                # Escala objetivo (~300 dpi) con tope de píxeles por lado.
+                target = min(dpi / 72.0, ENHANCE_MAX_SIDE / side)
+                # Escala de render: la nativa de la imagen incrustada, sin
+                # pasarse del objetivo (si el escaneo ya viene a más de
+                # 300 dpi no hay nada que ampliar) ni bajar de 1:1.
+                native = self._page_native_scale(page)
+                render = max(1.0, min(native or target, target))
+                pix = page.get_pixmap(matrix=fitz.Matrix(render, render),
+                                      annots=True)
+                img = Image.frombytes('RGB', (pix.width, pix.height),
+                                      pix.samples)
+                if target / render > 1.05:
+                    img = img.resize((int(pix.width * target / render),
+                                      int(pix.height * target / render)),
+                                     Image.LANCZOS)
+                # Punto blanco por canal (percentil 97 -> 255).
+                a = np.asarray(img).astype(np.float32)
+                wp = np.maximum(np.percentile(a, 97, axis=(0, 1)), 1.0)
+                a = np.clip(a * (255.0 / wp), 0, 255)
+                if gamma != 1.0:
+                    a = ((a / 255.0) ** gamma) * 255.0
+                img = Image.fromarray(a.astype(np.uint8))
+                img = img.filter(ImageFilter.UnsharpMask(
+                    radius=radius, percent=percent, threshold=threshold))
+                buf = io.BytesIO()
+                img.save(buf, format='PNG')
+                # Reemplazar la página por su versión mejorada, mismo tamaño
+                # en puntos (mismo patrón que ocr_apply: insertar y borrar).
+                new = doc.new_page(i + 1, width=rect.width,
+                                   height=rect.height)
+                new.insert_image(new.rect, stream=buf.getvalue())
+                doc.delete_page(i)
+            self.dirty = True
+            self.rev += 1
+            info = self.info()
+            info['enhanced'] = len(targets)
             return info
 
     def tables(self, index):

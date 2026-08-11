@@ -63,6 +63,9 @@
     <button id="btn-ocr-modal" class="btn-toolbar" title="Aplicar reconocimiento óptico (OCR)">
       <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8V5.6A1.6 1.6 0 0 1 5.6 4H8M16 4h2.4A1.6 1.6 0 0 1 20 5.6V8M20 16v2.4a1.6 1.6 0 0 1-1.6 1.6H16M8 20H5.6A1.6 1.6 0 0 1 4 18.4V16"/><path d="M7 12h10"/></svg>OCR
     </button>
+    <button id="btn-enhance-modal" class="btn-toolbar" title="Mejorar la resolución de páginas escaneadas borrosas">
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5l1.9 4.9 4.9 1.9-4.9 1.9L12 17.1l-1.9-4.9-4.9-1.9 4.9-1.9Z"/><path d="M19 15.5l.9 2.1 2.1.9-2.1.9-.9 2.1-.9-2.1-2.1-.9 2.1-.9Z"/></svg>Mejorar
+    </button>
     <button id="btn-export-modal" class="btn-toolbar" title="Exportar a Word, Excel o HTML">
       <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M8 11l4 4 4-4"/><path d="M5 19h14"/></svg>Exportar
     </button>
@@ -519,6 +522,34 @@ Total: $56,724.00</textarea>
       <div class="modal-foot">
         <button class="btn-modal-cancel" data-close>Cancelar</button>
         <button id="btn-ocr-run-modal" class="btn-modal-primary">Ejecutar OCR</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== ENHANCE MODAL (mejorar resolución) ===== -->
+  <div class="overlay" id="modal-enhance">
+    <div class="modal modal-enhance">
+      <div class="modal-head">
+        <div class="modal-head-title"><span class="modal-icon"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5l1.9 4.9 4.9 1.9-4.9 1.9L12 17.1l-1.9-4.9-4.9-1.9 4.9-1.9Z"/><path d="M19 15.5l.9 2.1 2.1.9-2.1.9-.9 2.1-.9-2.1-2.1-.9 2.1-.9Z"/></svg></span><span class="modal-title">Mejorar resolución</span></div>
+        <button class="modal-close" data-close>✕</button>
+      </div>
+      <div class="modal-enhance-body">
+        <div class="rp-label">Alcance</div>
+        <div class="scope-list scope-list-modal">
+          <label class="scope-card enh-scope" data-scope="doc"><span class="scope-radio"><span></span></span><span>Páginas escaneadas del documento (<span class="modal-page-total">–</span> páginas en total)</span></label>
+          <label class="scope-card enh-scope" data-scope="pg"><span class="scope-radio"><span></span></span><span>Solo página actual (página <span class="modal-active-page">1</span>)</span></label>
+        </div>
+        <div class="rp-label">Intensidad del realce</div>
+        <select id="enh-level" class="rp-select rp-select-modal">
+          <option value="soft">Suave · retoque ligero</option>
+          <option value="medium" selected>Media · recomendada</option>
+          <option value="strong">Alta · escaneos muy borrosos</option>
+        </select>
+        <p class="enh-note">Cada página se vuelve a generar a 300 dpi con más contraste y nitidez. La página queda convertida en imagen: si tenía capa OCR, vuelve a aplicar el OCR después. Se puede deshacer con Ctrl+Z.</p>
+      </div>
+      <div class="modal-foot">
+        <button class="btn-modal-cancel" data-close>Cancelar</button>
+        <button id="btn-enhance-run" class="btn-modal-primary">Mejorar resolución</button>
       </div>
     </div>
   </div>

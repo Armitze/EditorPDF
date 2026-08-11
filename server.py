@@ -343,6 +343,12 @@ class OcrBody(BaseModel):
     force: bool = False         # OCR incluso si la página ya tiene texto digital
 
 
+class EnhanceBody(BaseModel):
+    scope: str = 'doc'          # doc = páginas escaneadas | pg = página actual
+    page: int = 0
+    level: str = 'medium'       # soft | medium | strong
+
+
 def _doc_html(pdf: PdfState, indexes):
     body = pdf.html(indexes)
     name = (pdf.info().get('name') or 'documento').rsplit('.', 1)[0]
@@ -789,6 +795,21 @@ def create_app(manager: DocumentManager, windows: WindowService) -> FastAPI:
         except Exception as e:
             raise HTTPException(400, str(e))
         return result
+
+    @app.post('/api/enhance')
+    def enhance(body: EnhanceBody, pdf: PdfState = Depends(get_doc)):
+        """Mejora la resolución de páginas escaneadas que llegan borrosas.
+
+        scope 'doc' solo re-rasteriza las páginas que parecen escaneadas (las
+        digitales perderían su texto seleccionable); 'pg' fuerza la página
+        actual aunque tenga texto digital, porque el usuario la eligió.
+        """
+        index = None if body.scope == 'doc' else body.page
+        try:
+            return pdf.enhance_pages(index, level=body.level,
+                                     force=body.scope == 'pg')
+        except Exception as e:
+            raise HTTPException(400, str(e))
 
     @app.get('/api/tables')
     def tables(page: int = 0, pdf: PdfState = Depends(get_doc)):
