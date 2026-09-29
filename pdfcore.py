@@ -8,6 +8,7 @@ import threading
 
 import fitz  # PyMuPDF
 
+import fontmatch
 import renderpool
 
 THUMB_WIDTH = 176
@@ -499,6 +500,176 @@ class PdfState:
             self.dirty = True
             self.rev += 1
             return self.info()
+
+    # ---------- edición del texto original del documento ----------
+    # A diferencia de las anotaciones, aquí se reescribe el contenido de la
+    # página: el renglón elegido se borra del flujo de contenido (redacción
+    # sin relleno, que no toca imágenes ni líneas) y se vuelve a escribir en
+    # el mismo sitio, con el mismo tamaño, color y —lo esencial— la misma
+    # fuente (ver fontmatch.py para cómo se localiza).
+    _TEXT_FLAGS = (fitz.TEXT_PRESERVE_WHITESPACE | fitz.TEXT_MEDIABOX_CLIP)
+
+    @staticmethod
+    def _line_records(page):
+        """Renglones de texto de la página como dicts serializables."""
+        out = []
+        # El texto de las anotaciones (cajas de texto, notas…) también sale en
+        # la extracción, pero vive en la anotación, no en la página: se edita
+        # con doble clic desde el puntero, no desde aquí. Se descarta todo
+        # renglón que caiga dentro del recuadro de una anotación.
+        annot_rects = [a.rect for a in page.annots()]
+        d = page.get_text('dict', flags=PdfState._TEXT_FLAGS)
+        for block in d.get('blocks', []):
+            if block.get('type') != 0:
+                continue
+            for line in block.get('lines', []):
+                lr = fitz.Rect(line['bbox'])
+                if lr.is_empty or any((lr & ar).get_area() >= 0.5 * lr.get_area()
+                                      for ar in annot_rects):
+                    continue
+                spans = line.get('spans') or []
+                # Espacios duros (U+00A0) → normales: así el usuario edita
+                # texto «limpio» y la comparación con el original es fiable.
+                text = ''.join(s.get('text', '') for s in spans).replace(' ', ' ')
+                if not text.strip():
+                    continue
+                # Fuente dominante: la del span con más caracteres visibles.
+                dom = max(spans, key=lambda s: len(s.get('text', '').strip()))
+                flags = int(dom.get('flags') or 0)
+                x0, y0, x1, y1 = line['bbox']
+                out.append({
+                    'bbox': [x0, y0, x1, y1],
+                    'text': text,
+                    'origin': list(spans[0].get('origin') or (x0, y1)),
+                    'dir': list(line.get('dir') or (1, 0)),
+                    'font': fontmatch.display_name(dom.get('font')),
+                    'size': round(float(dom.get('size') or 11), 2),
+                    'color': '#%06x' % int(dom.get('color') or 0),
+                    'bold': bool(flags & 16), 'italic': bool(flags & 2),
+                    'serif': bool(flags & 4), 'mono': bool(flags & 8),
+                    'spans': len(spans),
+                    '_dom': dom,
+                })
+        return out
+
+    def text_lines(self, index):
+        """Renglones del texto original de la página (herramienta «editar texto»).
+
+        Coordenadas en puntos PDF (origen arriba-izquierda), como el render.
+        Lista vacía = página escaneada / sin texto digital.
+        """
+        fontmatch.warm_up()
+        with self._lock:
+            page = self._require()[index]
+            lines = self._line_records(page)
+            cache = {}
+            for ln in lines:
+                dom = ln.pop('_dom')
+                key = (dom.get('font'), ln['bold'], ln['italic'])
+                if key not in cache:
+                    cache[key] = fontmatch.is_embedded(page, key[0], key[1], key[2])
+                ln['embedded'] = cache[key]
+            return {'width': page.rect.width, 'height': page.rect.height,
+                    'lines': lines}
+
+    @staticmethod
+    def _match_line(lines, bbox, old_text=None):
+        """El renglón cuyo recuadro coincide (mejor solapamiento) con `bbox`."""
+        want = fitz.Rect(bbox)
+        best, best_score = None, 0.0
+        for ln in lines:
+            r = fitz.Rect(ln['bbox'])
+            inter = r & want
+            if inter.is_empty:
+                continue
+            union = r.get_area() + want.get_area() - inter.get_area()
+            score = inter.get_area() / union if union > 0 else 0
+            if old_text is not None and ln['text'] == old_text:
+                score += 1     # texto idéntico: candidato preferente
+            if score > best_score:
+                best, best_score = ln, score
+        if best is None or best_score < 0.5:
+            raise ValueError('El texto ya no está donde estaba (¿cambió la página?).')
+        return best
+
+    def edit_text(self, index, bbox, text, old_text=None):
+        """Sustituye el renglón situado en `bbox` por `text`, con su misma fuente.
+
+        Devuelve info() más `font`: {label, kind, detail, overflow} para que la
+        interfaz indique qué fuente se usó (misma incrustada, instalada en el
+        sistema o sustituta) y si el texto nuevo se sale de la página.
+        """
+        text = (text or '').replace('\r', '').replace('\n', ' ').replace('\t', ' ')
+        if not text.strip():
+            raise ValueError('Escribe algún texto.')
+        with self._lock:
+            doc = self._require()
+            page = doc[index]
+            lines = self._line_records(page)
+            ln = self._match_line(lines, bbox, old_text)
+            span = ln['_dom']
+            size = float(span.get('size') or 11)
+            color = int(span.get('color') or 0)
+            rgb = ((color >> 16 & 255) / 255, (color >> 8 & 255) / 255, (color & 255) / 255)
+            dx, dy = ln['dir']
+            # dir = (cos, sin) del renglón en coordenadas de página (y hacia abajo).
+            if abs(dx) >= abs(dy):
+                rotate = 0 if dx >= 0 else 180
+            else:
+                rotate = 90 if dy < 0 else 270
+            origin = fitz.Point(ln['origin'])
+
+            chosen = fontmatch.resolve(doc, page, span, text)
+
+            self._snapshot()
+            # Borrar el renglón original. Recuadro algo encogido en vertical
+            # para no rozar los renglones vecinos cuando el interlineado es
+            # muy justo (la redacción elimina todo glifo que toque el área).
+            r = fitz.Rect(ln['bbox'])
+            if rotate in (0, 180):
+                m = min(1.5, r.height * 0.12)
+                r = fitz.Rect(r.x0, r.y0 + m, r.x1, r.y1 - m)
+            else:
+                m = min(1.5, r.width * 0.12)
+                r = fitz.Rect(r.x0 + m, r.y0, r.x1 - m, r.y1)
+            page.add_redact_annot(r, fill=False)
+            page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE,
+                                  graphics=fitz.PDF_REDACT_LINE_ART_NONE,
+                                  text=fitz.PDF_REDACT_TEXT_REMOVE)
+            page = doc.reload_page(page)
+
+            # Escribir el texto nuevo en el mismo origen (línea base) y fuente.
+            if chosen['fontbuffer'] is not None:
+                page.insert_font(fontname=chosen['alias'], fontbuffer=chosen['fontbuffer'])
+            elif chosen['fontfile']:
+                page.insert_font(fontname=chosen['alias'], fontfile=chosen['fontfile'])
+            page.insert_text(origin, text, fontsize=size, fontname=chosen['alias'],
+                             color=rgb, rotate=rotate)
+
+            # ¿Se sale de la página? (solo aviso; el tamaño no se cambia).
+            try:
+                width = chosen['font'].text_length(text, fontsize=size)
+            except Exception:
+                width = 0
+            if rotate == 0:
+                overflow = origin.x + width > page.rect.x1 + 0.5
+            elif rotate == 180:
+                overflow = origin.x - width < page.rect.x0 - 0.5
+            elif rotate == 90:
+                overflow = origin.y - width < page.rect.y0 - 0.5
+            else:
+                overflow = origin.y + width > page.rect.y1 + 0.5
+
+            self.dirty = True
+            self.rev += 1
+            info = self.info()
+            info['font'] = {
+                'label': chosen['label'], 'kind': chosen['kind'],
+                'detail': fontmatch.KIND_TEXT.get(chosen['kind'], ''),
+                'original': ln['font'], 'size': round(size, 2),
+                'overflow': bool(overflow),
+            }
+            return info
 
     # ---------- páginas ----------
     def add_page(self, index):

@@ -17,7 +17,7 @@ const state = {
   rightHidden: false,      // panel de propiedades (derecha) oculto
   readingModeApplied: false, // el modo lectura se aplica solo en la 1ª apertura
   selected: null,          // demo: null | 'logo' | 'table' | 'invnum' | 'invdate' | 'client' | 'total'
-  tool: 'select',          // select | highlight | textbox | line | arrow
+  tool: 'select',          // select | highlight | textbox | line | arrow | edittext | sign
   zoom: 100,
   // Búsqueda: `hits` son las coincidencias del backend (con página y recuadro en
   // puntos PDF) y `hit` es la que está seleccionada ahora mismo.
@@ -636,6 +636,11 @@ function ensurePage(el) {
     el.dataset.annotKey = annotKey;
     loadAnnotHandles(el, i, annotKey);
   }
+  // Renglones clicables de la herramienta «editar texto».
+  if (isTextEditTool() && el.dataset.tlKey !== annotKey) {
+    el.dataset.tlKey = annotKey;
+    loadTextLineHandles(el, i, annotKey);
+  }
 }
 
 // Devuelve los elementos de dibujo compartidos a su contenedor neutro (viven
@@ -643,7 +648,7 @@ function ensurePage(el) {
 // rescatarlos o desaparecerían con ella).
 function stashDrawExtras() {
   const holder = $('#draw-extras');
-  for (const id of ['#draw-ghost-rect', '#draw-ghost-line', '#annot-text-input']) {
+  for (const id of ['#draw-ghost-rect', '#draw-ghost-line', '#annot-text-input', '#doctext-input']) {
     const el = $(id);
     if (el && el.parentElement !== holder) {
       el.hidden = true;
@@ -704,13 +709,16 @@ function renderDoc() {
       }
       builtDocKey = key;
     }
-    const drawing = state.tool !== 'select';
+    const editing = isTextEditTool();
+    const drawing = state.tool !== 'select' && !editing;
     $('#real-doc').classList.toggle('is-drawing', drawing);
-    $('#real-doc').classList.toggle('can-move-annots', !drawing);
-    if (drawing) hideSelPopup();
+    $('#real-doc').classList.toggle('can-move-annots', !drawing && !editing);
+    $('#real-doc').classList.toggle('is-editing-text', editing);
+    if (drawing || editing) hideSelPopup();
     // Con el puntero se pintan los handles para arrastrar anotaciones; con
     // cualquier herramienta de dibujo se retiran (estorbarían al dibujar).
     refreshAnnotHandles();
+    refreshTextLineHandles();
     return;
   }
   if (builtDocKey) {
@@ -885,7 +893,13 @@ function renderRightPanel() {
     : state.selected === 'logo' ? 'image'
     : state.selected === 'table' ? 'table'
     : 'text';
-  $('#ed-none').hidden = selType != null;
+  const realDoc = inDoc();
+  $('#ed-doctext').hidden = !realDoc;
+  $('#btn-edit-doctext').classList.toggle('is-active', isTextEditTool());
+  $('#btn-edit-doctext').textContent = isTextEditTool()
+    ? 'Haz clic sobre un renglón… (clic aquí para salir)'
+    : 'Editar texto del documento';
+  $('#ed-none').hidden = realDoc || selType != null;
   $('#ed-text').hidden = selType !== 'text';
   $('#ed-image').hidden = selType !== 'image';
   $('#ed-table').hidden = selType !== 'table';
@@ -1799,7 +1813,7 @@ function initDrawing() {
   const input = $('#annot-text-input');
 
   rd.addEventListener('pointerdown', e => {
-    if (!inDoc() || state.tool === 'select' || !input.hidden) return;
+    if (!inDoc() || state.tool === 'select' || isTextEditTool() || !input.hidden) return;
     const layer = e.target.closest('.pp-annot');
     if (!layer) return;
     e.preventDefault();
@@ -2054,6 +2068,205 @@ function initAnnotDrag() {
       refreshAnnotHandles();   // devolver el handle a su sitio real
     }
   });
+}
+
+/* ===== Editar el texto del documento (misma fuente) ===== */
+// Con la herramienta «editar texto» cada renglón del PDF se cubre con un
+// recuadro clicable. Al hacer clic se abre un cuadro de edición justo encima,
+// con el texto original y su mismo tamaño; Enter envía el texto nuevo a
+// /api/text/edit, que lo reescribe en la página con la fuente original (la
+// incrustada en el PDF si tiene los glifos; si no, la misma instalada en
+// Windows; en último caso una sustituta, y se avisa).
+const TEXT_EDIT_TOOL = 'edittext';
+
+function isTextEditTool() { return state.tool === TEXT_EDIT_TOOL; }
+
+// Fuente CSS aproximada para el cuadro de edición (solo para que «se parezca»
+// mientras se escribe; la fuente real la pone el servidor al aplicar).
+function lineCssFont(ln) {
+  const fam = ln.mono ? 'Consolas, "Courier New", monospace'
+    : ln.serif ? 'Cambria, Georgia, "Times New Roman", serif'
+    : 'Calibri, Arial, "Segoe UI", sans-serif';
+  return `${ln.italic ? 'italic ' : ''}${ln.bold ? '700 ' : '400 '}1em ${fam}`;
+}
+
+async function loadTextLineHandles(el, index, key) {
+  const layer = el.querySelector('.pp-annot');
+  if (!layer) return;
+  const clear = () => layer.querySelectorAll('.textline-handle').forEach(h => h.remove());
+  if (!isTextEditTool()) { clear(); return; }
+  const token = (el._tlToken || 0) + 1;
+  el._tlToken = token;
+  let data;
+  try {
+    data = await api.get(`/api/textlines/${index}`);
+  } catch { return; }
+  if (el._tlToken !== token || el.dataset.tlKey !== key
+      || !el.isConnected || !isTextEditTool()) return;
+  clear();
+  const t = activeTab();
+  const sz = t && t.pageSizes && t.pageSizes[index];
+  const f = PAGE_DISPLAY_WIDTH / ((sz && sz.width) || PAGE_DISPLAY_WIDTH);
+  for (const ln of data.lines) {
+    const [x0, y0, x1, y1] = ln.bbox;
+    const h = document.createElement('div');
+    h.className = 'textline-handle';
+    h.style.left = (x0 * f - 2) + 'px';
+    h.style.top = (y0 * f - 1) + 'px';
+    h.style.width = Math.max(8, (x1 - x0) * f + 4) + 'px';
+    h.style.height = Math.max(6, (y1 - y0) * f + 2) + 'px';
+    h.dataset.page = index;
+    h._line = ln;
+    h.title = `${ln.font} · ${ln.size} pt · clic para editar`;
+    layer.appendChild(h);
+  }
+  if (!data.lines.length && el._visible && !el._tlWarned) {
+    el._tlWarned = true;
+    toast(`La página ${index + 1} no tiene texto editable (¿escaneada? Usa OCR primero).`);
+  }
+}
+
+function refreshTextLineHandles() {
+  const rd = $('#real-doc');
+  for (const el of rd.children) {
+    if (!isTextEditTool()) {
+      el.querySelectorAll('.textline-handle').forEach(h => h.remove());
+      delete el.dataset.tlKey;
+      continue;
+    }
+    if (!el._visible && el !== rd.firstElementChild) continue;
+    const i = Number(el.dataset.page);
+    const key = `${state.activeTabId}|${state.doc.rev}|${i}`;
+    if (el.dataset.tlKey === key && el.querySelector('.textline-handle')) continue;
+    el.dataset.tlKey = key;
+    loadTextLineHandles(el, i, key);
+  }
+  if (!isTextEditTool()) cancelTextLineEdit();
+}
+
+// Muestra en la pestaña Edición la fuente del renglón (o el resultado de aplicar).
+function showTextLineInfo(ln, result) {
+  const box = $('#ed-doctext-info');
+  if (!box) return;
+  box.hidden = false;
+  $('#ed-doctext-fontname').textContent = (result && result.label) || ln.font;
+  $('#ed-doctext-size').textContent = `${(result && result.size) || ln.size} pt`;
+  const src = $('#ed-doctext-src');
+  if (result) {
+    src.textContent = fontResultText(result);
+    src.classList.toggle('is-warn', result.kind === 'substitute' || result.overflow);
+  } else {
+    src.textContent = ln.embedded
+      ? 'Fuente incrustada en el PDF: se reutiliza tal cual.'
+      : 'Fuente no incrustada: se usará la misma instalada en Windows.';
+    src.classList.remove('is-warn');
+  }
+}
+
+function fontResultText(r) {
+  let msg;
+  switch (r.kind) {
+    case 'exact': msg = `Texto reescrito con la misma fuente incrustada (${r.label}).`; break;
+    case 'base14': msg = `Texto reescrito con la fuente estándar ${r.label}.`; break;
+    case 'system': msg = `Texto reescrito con ${r.label}, la misma fuente instalada en Windows.`; break;
+    case 'family': msg = `Texto reescrito con ${r.label} (misma familia; la original no tenía todos los caracteres).`; break;
+    default: msg = `Aviso: la fuente original (${r.original}) no está disponible; se usó ${r.label}.`;
+  }
+  if (r.overflow) msg += ' El texto nuevo se sale del borde de la página.';
+  return msg;
+}
+
+function openTextLineEditor(handle) {
+  const ln = handle._line;
+  if (!ln) return;
+  const layer = handle.closest('.pp-annot');
+  const input = $('#doctext-input');
+  cancelTextLineEdit();
+  layer.appendChild(input);
+  const page = Number(handle.dataset.page);
+  const t = activeTab();
+  const sz = t && t.pageSizes && t.pageSizes[page];
+  const f = PAGE_DISPLAY_WIDTH / ((sz && sz.width) || PAGE_DISPLAY_WIDTH);
+  const [x0, y0, x1, y1] = ln.bbox;
+  const h = (y1 - y0) * f;
+  Object.assign(input.style, {
+    left: (x0 * f - 4) + 'px',
+    top: (y0 * f - 3) + 'px',
+    height: (h + 6) + 'px',
+    width: Math.max(140, (x1 - x0) * f + 60) + 'px',
+    fontSize: (ln.size * f) + 'px',
+    font: lineCssFont(ln),
+    color: ln.color || '#2b303a',
+  });
+  input.style.fontSize = (ln.size * f) + 'px';   // `font` lo reinicia: fijarlo después
+  input.value = ln.text;
+  input._line = ln;
+  input._handle = handle;
+  input.dataset.page = page;
+  input.hidden = false;
+  handle.classList.add('is-editing');
+  input.focus();
+  input.select();
+  showTextLineInfo(ln);
+}
+
+function cancelTextLineEdit() {
+  const input = $('#doctext-input');
+  if (!input || input.hidden) return;
+  input.hidden = true;
+  if (input._handle) input._handle.classList.remove('is-editing');
+  input._line = null;
+  input._handle = null;
+}
+
+async function commitTextLineEdit() {
+  const input = $('#doctext-input');
+  const ln = input._line;
+  const page = Number(input.dataset.page);
+  const text = input.value;
+  cancelTextLineEdit();
+  if (!ln || text === ln.text) return;
+  if (!text.trim()) { toast('El texto no puede quedar vacío.'); return; }
+  try {
+    const info = await api.post('/api/text/edit', {
+      page, bbox: ln.bbox, text, oldText: ln.text,
+    });
+    const result = info.font;
+    delete info.font;
+    await applyDoc(info);
+    if (result) {
+      toast(fontResultText(result));
+      showTextLineInfo(ln, result);
+    }
+  } catch (err) {
+    toast('No se pudo editar el texto: ' + err.message);
+  }
+}
+
+function initTextEdit() {
+  const rd = $('#real-doc');
+  const input = $('#doctext-input');
+
+  rd.addEventListener('pointerdown', e => {
+    if (!isTextEditTool()) return;
+    const handle = e.target.closest('.textline-handle');
+    if (!handle) return;
+    e.preventDefault();
+    e.stopPropagation();
+    openTextLineEditor(handle);
+  });
+
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      commitTextLineEdit();
+    } else if (e.key === 'Escape') {
+      cancelTextLineEdit();
+    }
+    e.stopPropagation();
+  });
+  // Clic fuera del cuadro: cancelar (como en las anotaciones de texto).
+  input.addEventListener('blur', () => cancelTextLineEdit());
 }
 
 /* ===== Organizar páginas (estilo Adobe) ===== */
@@ -2828,6 +3041,11 @@ function init() {
       setState({ tool: b.dataset.tool });
     });
   });
+  // Editar texto del documento (pestaña Edición): activa/desactiva la herramienta.
+  $('#btn-edit-doctext').addEventListener('click', e => {
+    e.stopPropagation();
+    setState({ tool: isTextEditTool() ? 'select' : TEXT_EDIT_TOOL });
+  });
   // Importar la firma PNG y, tras cargarla, entrar en modo «colocar firma».
   $('#sign-file').addEventListener('change', onSignFileChosen);
   // Botón para reemplazar la firma recordada por otra imagen.
@@ -3028,6 +3246,8 @@ function init() {
     }
     if (e.key === 'Escape') {
       if (!$('#annot-text-input').hidden) $('#annot-text-input').hidden = true;
+      else if (!$('#doctext-input').hidden) cancelTextLineEdit();
+      else if (isTextEditTool()) setState({ tool: 'select' });
       else if (state.modal) setState({ modal: null });
       else if (state.ctx) setState({ ctx: null });
       else if (state.selected) clearAll();
@@ -3036,6 +3256,7 @@ function init() {
 
   initDrawing();
   initAnnotDrag();
+  initTextEdit();
   initPageOrganizer();
   initTextSelection();
   render();

@@ -441,6 +441,26 @@ a{color:#2563a8}a:hover{color:#1d5290}
 /* Al arrastrar, dejar que el handle se vea aunque salga del borde de la hoja. */
 .pp-annot:has(.annot-handle.is-dragging){overflow:visible}
 
+/* Herramienta «editar texto»: cada renglón del documento es clicable. La
+   capa sigue sin capturar el ratón; solo los renglones (y el input) lo hacen. */
+.real-doc.is-editing-text .pp-annot{pointer-events:none}
+.real-doc.is-editing-text .pp-text{user-select:none}
+.textline-handle{position:absolute;pointer-events:auto;cursor:text;box-sizing:border-box;
+  border:1px solid rgba(37,99,168,.22);background:rgba(37,99,168,.04);border-radius:2px;
+  transition:background .1s,border-color .1s}
+.textline-handle:hover{background:rgba(37,99,168,.12);border-color:rgba(37,99,168,.8)}
+.textline-handle.is-editing{visibility:hidden}
+/* El cuadro de edición se coloca sobre el renglón, con su mismo tamaño de letra
+   (las coordenadas van en px del lienzo base y se escalan con la capa). */
+#doctext-input{position:absolute;box-sizing:border-box;border:1.5px solid #2563a8;border-radius:3px;
+  padding:0 3px;margin:0;outline:none;background:#fff;color:#2b303a;line-height:1;white-space:pre;
+  box-shadow:0 4px 14px rgba(20,28,40,.18);z-index:8}
+.ed-doctext-info{margin-top:14px;padding-top:14px;border-top:1px solid #e6e9ee}
+.ed-doctext-font{font-size:13px;font-weight:600;color:#2b303a;margin-bottom:4px}
+.ed-doctext-src{font-size:12px;color:#6b7480;line-height:1.5}
+.ed-doctext-src.is-warn{color:#b3541e}
+.btn-accent-block.is-active{background:#2563a8;color:#fff}
+
 /* Resaltados de la búsqueda: no capturan el ratón. */
 .pp-search{z-index:3;pointer-events:none}
 .search-hit{position:absolute;background:rgba(255,214,0,.42);

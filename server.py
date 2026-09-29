@@ -329,6 +329,13 @@ class DeleteAnnotBody(BaseModel):
     xref: int
 
 
+class EditTextBody(BaseModel):
+    page: int
+    bbox: list[float]
+    text: str
+    oldText: str | None = None
+
+
 class TableExportBody(BaseModel):
     page: int
     fmt: str  # csv | excel
@@ -625,6 +632,22 @@ def create_app(manager: DocumentManager, windows: WindowService) -> FastAPI:
     def delete_annot(body: DeleteAnnotBody, pdf: PdfState = Depends(get_doc)):
         try:
             return pdf.delete_annot(body.page, body.xref)
+        except Exception as e:
+            raise HTTPException(400, str(e))
+
+    @app.get('/api/textlines/{index}')
+    def text_lines(index: int, pdf: PdfState = Depends(get_doc)):
+        """Renglones del texto original de la página (para editarlos)."""
+        try:
+            return pdf.text_lines(index)
+        except Exception as e:
+            raise HTTPException(400, str(e))
+
+    @app.post('/api/text/edit')
+    def edit_text(body: EditTextBody, pdf: PdfState = Depends(get_doc)):
+        """Reescribe un renglón del documento conservando su fuente."""
+        try:
+            return pdf.edit_text(body.page, body.bbox, body.text, body.oldText)
         except Exception as e:
             raise HTTPException(400, str(e))
 
